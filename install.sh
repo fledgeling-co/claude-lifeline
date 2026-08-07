@@ -131,6 +131,15 @@ fi
 ln -s "${LIFELINE_HOME}/claude-wrapper.sh" "${CLAUDE_LINK}"
 say "repointed ${CLAUDE_LINK} -> lifeline wrapper (claude stays your command)"
 
+# Put `lifeline` on PATH so `lifeline status` / `lifeline doctor` are real commands.
+# dist/cli/index.js carries a node shebang, so a direct symlink runs it.
+chmod +x "${SRC}/dist/cli/index.js" 2>/dev/null || true
+ln -sf "${SRC}/dist/cli/index.js" "${LOCAL_BIN}/lifeline"
+if ! command -v lifeline >/dev/null 2>&1; then
+  warn "installed the 'lifeline' command to ${LOCAL_BIN}, which is not on your PATH."
+  warn "add it with:  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
+fi
+
 # --- render + load launchd agents --------------------------------------------------
 render() { sed \
   -e "s|@@NODE@@|${NODE_BIN}|g" \
@@ -148,6 +157,25 @@ for svc in gateway daemon watcher; do
   launchctl bootstrap "gui/$(id -u)" "${plist}" >/dev/null 2>&1 || launchctl load "${plist}" >/dev/null 2>&1 || true
   say "loaded com.lifeline.${svc}"
 done
+
+# --- the status window (menu-bar app) ----------------------------------------------
+# Compiled locally with swiftc (lifeline's audience is developers, so the toolchain is
+# effectively universal); skipped gracefully when absent — everything else still works.
+if command -v swiftc >/dev/null 2>&1; then
+  say "compiling the status window (menu-bar app)"
+  mkdir -p "${LIFELINE_HOME}/bin"
+  if swiftc -O -o "${LIFELINE_HOME}/bin/lifeline-menubar" "${SRC}/menubar/lifeline-menubar.swift" "${SRC}/menubar/TerminalRevealer.swift" 2>"${LIFELINE_HOME}/logs/menubar-build.log"; then
+    plist="${LAUNCH_AGENTS}/com.lifeline.menubar.plist"
+    render "${SRC}/install/com.lifeline.menubar.plist.tmpl" > "${plist}"
+    launchctl bootout "gui/$(id -u)/com.lifeline.menubar" >/dev/null 2>&1 || true
+    launchctl bootstrap "gui/$(id -u)" "${plist}" >/dev/null 2>&1 || launchctl load "${plist}" >/dev/null 2>&1 || true
+    say "loaded com.lifeline.menubar (look for the pulse in your menu bar)"
+  else
+    warn "status-window build failed (see ${LIFELINE_HOME}/logs/menubar-build.log); continuing without it"
+  fi
+else
+  say "swiftc not found — skipping the menu-bar status window (everything else still works; install Xcode Command Line Tools and re-run to add it)"
+fi
 
 # --- chain ~/.claude/settings.json through the gateway ------------------------------
 # Claude Code applies settings.json env itself (outranking the wrapper's export), so if a

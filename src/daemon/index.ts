@@ -11,6 +11,7 @@
 
 import { readdirSync, rmSync, statSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
+import type { Classification } from "../shared/classifier.js";
 import { exponentialCeiling } from "../shared/backoff.js";
 import type { LifelineConfig } from "../shared/config.js";
 import { loadConfig } from "../shared/config.js";
@@ -63,6 +64,7 @@ export interface RunAgentView {
 
 const RECOVERING: ReadonlySet<AgentState> = new Set<AgentState>([
   "retrying",
+  "stalled",
   "paused-offline",
   "paused-usage-limit",
   "paused-manual",
@@ -198,7 +200,7 @@ export interface DaemonDeps {
   now?: (() => number) | undefined;
   rng?: (() => number) | undefined;
   /** Injectable scan so tests drive the daemon off fixtures without a watcher. */
-  scan?: ((runDir: string, opts: { now: number; liveWindowMs: number }) => RunScan | null) | undefined;
+  scan?: ((runDir: string, opts: { now: number; liveWindowMs: number; stallWindowMs?: number; contextLimitTokens?: number }) => RunScan | null) | undefined;
   relaunch?: RelaunchDeps | undefined;
   /** Skip discovery/live scanning (tests tick manually via markDirty). */
   watch?: boolean | undefined;
@@ -246,7 +248,12 @@ export function startDaemon(
 
   function ingest(runDir: string): void {
     const t = now();
-    const result = scan(runDir, { now: t, liveWindowMs: cfg.liveWindowMs });
+    const result = scan(runDir, {
+      now: t,
+      liveWindowMs: cfg.liveWindowMs,
+      stallWindowMs: cfg.stallWindowMs,
+      contextLimitTokens: cfg.contextLimitTokens,
+    });
     if (!result) return;
     scans.set(result.runId, result);
 
@@ -292,6 +299,34 @@ export function startDaemon(
         `lost agent ${finding.agentId} (${finding.item ?? "?"}) ${finding.classification.class} -> ${parked.state}`,
         { run: result.runId, attempt: parked.attempts, nextRetryAt: parked.nextRetryAt },
       );
+    }
+
+    // Stalled agents: alive, but silent past the stall window. Treated like a retryable loss
+    // (a synthesized STALL classification) so the same ledger + relaunch path recovers it.
+    for (const s of result.stalled) {
+      const existing = getEntry(ledger, s.key);
+      if (existing && existing.updatedAt >= s.mtimeMs) continue;
+      if (existing && (isTerminal(existing.state) || existing.state === "paused-manual")) continue;
+      const seed =
+        existing ??
+        newEntry({ key: s.key, runId: result.runId, item: s.item, agentId: s.agentId, now: t });
+      const stallClass: Classification = {
+        class: "STALL",
+        retryable: true,
+        park: false,
+        retryAfterMs: null,
+        reason: `no output or context change for ${Math.round(s.quietForMs / 60000)}m`,
+      };
+      const updated = scheduleNext(seed, stallClass, cfg.recovery, t, {
+        rng,
+        lastError: `stalled ${Math.round(s.quietForMs / 60000)}m`,
+      });
+      const parked = online ? updated : markPaused(updated, "paused-offline", t);
+      ledger = upsertEntry(ledger, parked);
+      log.info(`stalled agent ${s.agentId} (${s.item ?? "?"}) -> ${parked.state}`, {
+        run: result.runId,
+        quietForMs: s.quietForMs,
+      });
     }
 
     // Recovery is over only on EVIDENCE: a journaled result for that key. Inferring it from
@@ -428,27 +463,121 @@ export function startDaemon(
 
   function statusRunOf(ledger: RunLedger): StatusRun {
     const run = scans.get(ledger.runId);
-    const entries = Object.values(ledger.entries);
-    const views: RunAgentView[] = entries.map((e) => ({ state: e.state, live: false }));
-    for (let i = 0; i < (run?.liveAgents ?? 0); i += 1) views.push({ state: "retrying", live: true });
+    const t = now();
+    const ledgerEntries = ledger.entries;
+    const teleByAgent = new Map<string, (typeof run extends undefined ? never : NonNullable<typeof run>)["agents"][number]>();
+    for (const a of run?.agents ?? []) if (a.agentId) teleByAgent.set(a.agentId, a);
 
-    const agents: StatusAgent[] = entries.map((e) => ({
-      agentId: e.agentId,
-      item: e.item,
-      state: e.state,
-      attempts: e.attempts,
-      maxAttempts: cfg.recovery.maxAttempts,
-      nextRetryAt: e.nextRetryAt,
-      lastClass: e.lastClass,
-    }));
+    // Build one StatusAgent per KNOWN agent: every transcript the scan saw, plus any ledger
+    // entry whose agent has no live transcript (e.g. relocated). Ledger state wins over the
+    // scan's kind (the ledger knows about pauses, retries and terminal failures the scan can't).
+    const seen = new Set<string>();
+    const agents: StatusAgent[] = [];
+    const views: RunAgentView[] = [];
+
+    for (const a of run?.agents ?? []) {
+      const entry = a.agentId ? findEntryByAgent(ledgerEntries, a.agentId) : null;
+      const state: AgentState = entry ? entry.state : scanKindToState(a.kind);
+      const live = a.kind === "live" && (!entry || entry.state === "done" || entry.state === "retrying");
+      views.push({ state, live });
+      agents.push({
+        agentId: a.agentId,
+        item: a.item ?? entry?.item ?? null,
+        state,
+        attempts: entry?.attempts ?? 0,
+        maxAttempts: cfg.recovery.maxAttempts,
+        nextRetryAt: entry?.nextRetryAt ?? null,
+        lastClass: entry?.lastClass ?? null,
+        durationMs: a.durationMs,
+        contextFrac: a.contextFrac,
+        stalledForMs: a.kind === "stalled" ? a.quietForMs : null,
+        tail: a.tail,
+      });
+      if (a.agentId) seen.add(a.agentId);
+    }
+    // Ledger entries with no matching transcript this scan (relocated/older runs).
+    for (const e of Object.values(ledgerEntries)) {
+      if (e.agentId && seen.has(e.agentId)) continue;
+      views.push({ state: e.state, live: false });
+      agents.push({
+        agentId: e.agentId,
+        item: e.item,
+        state: e.state,
+        attempts: e.attempts,
+        maxAttempts: cfg.recovery.maxAttempts,
+        nextRetryAt: e.nextRetryAt,
+        lastClass: e.lastClass,
+      });
+    }
+
+    const contextFrac = agents.reduce<number | null>(
+      (m, a) => (a.contextFrac == null ? m : m == null ? a.contextFrac : Math.max(m, a.contextFrac)),
+      null,
+    );
 
     return {
       runId: ledger.runId,
       project: ledger.project,
-      // A live sibling is what turns a per-agent failure into a run-level warning.
       state: computeRunState(views),
       agents,
+      durationMs: run?.startedAtMs != null ? t - run.startedAtMs : null,
+      contextFrac,
+      note: runNote(run),
+      cwd: run?.cwd ?? null,
+      callerTail: run?.callerTail ?? [],
+      ...terminalFor(run?.cwd ?? null),
     };
+  }
+
+  /** Match a run to the wrapper's per-tty terminal record by cwd, for the reveal action. */
+  function terminalFor(cwd: string | null): { tty?: string | null; term?: string | null } {
+    if (!cwd) return {};
+    const dir = join(paths.home(), "terminals");
+    let files: string[];
+    try {
+      files = readdirSync(dir).filter((f) => f.endsWith(".json"));
+    } catch {
+      return {};
+    }
+    for (const f of files) {
+      const rec = readJson<{ cwd?: string; tty?: string; term?: string } | null>(join(dir, f), null);
+      if (rec && rec.cwd === cwd) return { tty: rec.tty ?? null, term: rec.term ?? null };
+    }
+    return {};
+  }
+
+  /** A ledger entry for an agentId, or null. */
+  function findEntryByAgent(entries: RunLedger["entries"], agentId: string) {
+    for (const e of Object.values(entries)) if (e.agentId === agentId) return e;
+    return null;
+  }
+
+  /** The scan's view of an agent with no ledger entry (it never needed recovery). */
+  function scanKindToState(kind: RunScan["agents"][number]["kind"]): AgentState {
+    switch (kind) {
+      case "done":
+        return "done";
+      case "lost":
+        return "failed-terminal";
+      case "stalled":
+        return "stalled";
+      case "live":
+        return "retrying"; // a live, healthy agent; run-level rollup reads this as "running"
+    }
+  }
+
+  /** One-line "what is this run doing now": the most recently active agent's latest line. */
+  function runNote(run: RunScan | undefined): string | null {
+    if (!run || run.agents.length === 0) return null;
+    const working = run.agents.filter((a) => a.kind === "live").length;
+    let newest: RunScan["agents"][number] | null = null;
+    for (const a of run.agents) {
+      if (a.lastTsMs == null) continue;
+      if (!newest || (newest.lastTsMs ?? 0) < a.lastTsMs) newest = a;
+    }
+    const latest = newest?.tail.at(-1);
+    if (latest) return latest;
+    return working > 0 ? `${working} agent${working === 1 ? "" : "s"} working` : null;
   }
 
   function writeStatus(): void {

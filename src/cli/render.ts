@@ -86,6 +86,8 @@ export function formatAgentState(agent: StatusAgent, nowMs: number): string {
       return "paused (usage limit)";
     case "paused-manual":
       return "paused";
+    case "stalled":
+      return agent.stalledForMs != null ? `stalled (${formatDuration(agent.stalledForMs)})` : "stalled";
     case "failed-terminal":
       return "failed";
     case "done":
@@ -113,6 +115,8 @@ function agentColor(state: AgentState): AnsiCode {
   switch (state) {
     case "retrying":
       return ANSI.yellow;
+    case "stalled":
+      return ANSI.yellow;
     case "paused-offline":
     case "paused-usage-limit":
     case "paused-manual":
@@ -131,6 +135,7 @@ function agentGlyph(state: AgentState): string {
     case "done":
       return "+";
     case "retrying":
+    case "stalled":
     case "paused-offline":
     case "paused-usage-limit":
     case "paused-manual":

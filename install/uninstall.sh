@@ -11,7 +11,7 @@ CLAUDE_LINK="${LOCAL_BIN}/claude"
 
 say() { printf '\033[36mlifeline\033[0m %s\n' "$*"; }
 
-for svc in gateway daemon watcher; do
+for svc in gateway daemon watcher menubar; do
   launchctl bootout "gui/$(id -u)/com.lifeline.${svc}" >/dev/null 2>&1 || \
     launchctl unload "${LAUNCH_AGENTS}/com.lifeline.${svc}.plist" >/dev/null 2>&1 || true
   rm -f "${LAUNCH_AGENTS}/com.lifeline.${svc}.plist"

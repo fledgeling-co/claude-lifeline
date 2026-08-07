@@ -1,0 +1,897 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>lifeline — interactive menu-bar prototype</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js" integrity="sha384-g4NTh/Iv5PPU4xPyhEWqPcwtNXOvdaDI8LLnyYfyNZOjKJeYQyjzQ9X5275eBjpt" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js" integrity="sha384-qOkzR5Ke/XkQxuGVJ9hpFEpDlcoLtWwVYhnJf06cLIZa2vaIptSqaubivErzmD5O" crossorigin="anonymous"></script>
+<style>
+  /* Interactive reference for the SwiftUI menu-bar app: a fake macOS desktop with the
+     lifeline status item, an animated popover, drag-to-tear-off into a resizable window,
+     and a dev bar (bottom-center) for switching states. Kit values hold inside the
+     popover: 13px body, 24px controls, label tiers, sentence case, arrow cursor, one
+     accent (mint) on health + the single prominent action. URL params mirror the dev bar
+     for headless capture: ?state=warning|healthy|empty|quiet&appearance=dark|light&open=1&mode=window */
+  * { box-sizing: border-box; margin: 0; cursor: default; user-select: none; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    font: 13px/16px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- the fake OS ---------- */
+  .desktop {
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(120% 90% at 20% 0%, #2E4A66 0%, transparent 60%),
+      radial-gradient(120% 100% at 85% 100%, #14343B 0%, transparent 55%),
+      linear-gradient(160deg, #1C2B3A 0%, #0E1620 100%);
+  }
+  #aurora { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: 0.85; }
+  .menubar, .shell, .arrow, .devbar { z-index: 40; } /* stage sits behind everything */
+
+  /* the retrying dot has a heartbeat; the failed dot is still (it isn't being helped yet) */
+  @keyframes heartbeat {
+    0%, 70%, 100% { transform: scale(1); opacity: 1; }
+    12% { transform: scale(1.45); opacity: 0.85; }
+    24% { transform: scale(1); }
+  }
+  .dot.recover { animation: heartbeat 1.6s ease-in-out infinite; }
+  /* mint shimmer travelling the healthy segment of the strip */
+  .healthbar .good { position: relative; overflow: hidden; }
+  .healthbar .good::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%);
+    width: 40%; transform: translateX(-120%);
+    animation: shimmer 3.2s ease-in-out infinite;
+  }
+  @keyframes shimmer { 0%, 55% { transform: translateX(-120%); } 85%, 100% { transform: translateX(300%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .dot.recover { animation: none; }
+    .healthbar .good::after { animation: none; }
+    #aurora { display: none; }
+  }
+  .menubar {
+    position: fixed; top: 0; left: 0; right: 0; height: 25px; z-index: 40;
+    display: flex; align-items: center; gap: 18px; padding: 0 12px 0 14px;
+    background: rgba(24,26,32,0.62); backdrop-filter: blur(24px);
+    color: rgba(255,255,255,0.92); font-size: 13px;
+  }
+  .menubar .apple { font-size: 14px; }
+  .menubar .appname { font-weight: 600; }
+  .menubar .spacer { flex: 1; }
+  .menubar .tray { display: flex; align-items: center; gap: 14px; }
+  .statusitem {
+    display: flex; align-items: center; justify-content: center;
+    width: 30px; height: 21px; border-radius: 4px;
+    transition: background 0.15s ease;
+  }
+  .statusitem:hover, .statusitem.open { background: rgba(255,255,255,0.18); }
+  .statusitem svg { width: 19px; height: 12px; }
+  .clock { font-variant-numeric: tabular-nums; }
+
+  /* ---------- popover / window shell ---------- */
+  .shell {
+    position: fixed; z-index: 30; width: 360px;
+    border-radius: 20px; overflow: hidden;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.38), 0 0 0 0.5px rgba(0,0,0,0.2);
+    opacity: 0; transform: scale(0.92); transform-origin: top right;
+    pointer-events: none;
+    transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+  }
+  .shell.visible { opacity: 1; transform: scale(1); pointer-events: auto; }
+  .shell.dragging { transition: none; transform: rotate(-1deg) scale(1.02); box-shadow: 0 34px 90px rgba(0,0,0,0.55); }
+  .shell.window {
+    width: 520px; border-radius: 12px;
+    resize: both; overflow: auto; min-width: 360px; min-height: 420px; max-width: 900px; max-height: 90vh;
+    transform: none; transition: opacity 0.18s ease, border-radius 0.25s ease, width 0.25s ease;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .shell, .shell.window { transition: opacity 0.15s linear; transform: none; }
+  }
+  .arrow {
+    position: fixed; z-index: 31; width: 18px; height: 9px; pointer-events: none;
+    opacity: 0; transition: opacity 0.18s ease;
+  }
+  .arrow.visible { opacity: 1; }
+  .arrow::after {
+    content: ""; position: absolute; left: 3px; top: 3px; width: 12px; height: 12px;
+    transform: rotate(45deg); border-radius: 2px;
+  }
+  .dark-arrow::after { background: rgb(50,50,52); }
+  .light-arrow::after { background: rgb(246,246,248); }
+
+  .titlebar {
+    display: none; align-items: center; gap: 8px; padding: 10px 12px 8px;
+  }
+  .shell.window .titlebar { display: flex; }
+  .lights { display: flex; gap: 8px; }
+  .light-dot { width: 12px; height: 12px; border-radius: 6px; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.15); }
+  .light-dot.r { background: #FF5F57; } .light-dot.y { background: #FEBC2E; } .light-dot.g { background: #28C840; }
+  .titlebar .wtitle { flex: 1; text-align: center; font-weight: 600; margin-right: 52px; }
+
+  /* ---------- popover content (the audited design) ---------- */
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+  .shell.light { background: rgba(246,246,248,0.97); color: rgba(0,0,0,0.85); }
+  .light .sec { color: rgba(0,0,0,0.5); } .light .ter { color: rgba(0,0,0,0.25); }
+  .light .row:hover, .light .agent:hover { background: rgba(0,0,0,0.045); }
+  .light .divider { background: rgba(0,0,0,0.08); }
+  .light .rundiv { background: rgba(0,0,0,0.06); }
+  .light .btn { background: rgba(0,0,0,0.055); }
+  .light .btn:hover { background: rgba(0,0,0,0.09); }
+  .light .btn:active { background: rgba(0,0,0,0.13); }
+  .shell.dark { background: rgba(50,50,52,0.97); color: rgba(255,255,255,0.96); }
+  .dark .sec { color: rgba(255,255,255,0.55); } .dark .ter { color: rgba(255,255,255,0.28); }
+  .dark .row:hover, .dark .agent:hover { background: rgba(255,255,255,0.06); }
+  .dark .divider { background: rgba(255,255,255,0.09); }
+  .dark .rundiv { background: rgba(255,255,255,0.07); }
+  .dark .btn { background: rgba(255,255,255,0.09); }
+  .dark .btn:hover { background: rgba(255,255,255,0.13); }
+  .dark .btn:active { background: rgba(255,255,255,0.18); }
+
+  .header { padding: 12px 16px 12px; }
+  .h-top { display: flex; align-items: center; gap: 8px; }
+  .pulse { width: 22px; height: 14px; flex: none; }
+  .h-title { font-weight: 600; }
+  .pill { margin-left: auto; font-size: 10px; line-height: 13px; font-weight: 600; padding: 1.5px 8px; border-radius: 99px; }
+  .pill.online  { color: #0B7B58; background: rgba(0,200,179,0.16); }
+  .dark .pill.online { color: #4CE0B3; background: rgba(0,218,195,0.18); }
+  .pill.offline { color: #B25000; background: rgba(255,141,40,0.18); }
+  .dark .pill.offline { color: #FFB067; background: rgba(255,141,40,0.22); }
+  .h-line { margin-top: 4px; }
+  .healthbar { display: flex; height: 3px; border-radius: 1.5px; overflow: hidden; margin-top: 6px; }
+  .healthbar .good { background: #00C8B3; transition: width 0.4s ease; }
+  .healthbar .bad  { background: rgba(255,141,40,0.9); transition: width 0.4s ease; }
+  /* while installing, a continuous stripe travels the filled part so the bar reads as
+     working even between the discrete steps. Stops (via .filled) when it completes. */
+  .healthbar.installing .good::before {
+    content: ""; position: absolute; inset: 0;
+    background: repeating-linear-gradient(115deg,
+      rgba(255,255,255,0.28) 0 10px, rgba(255,255,255,0) 10px 22px);
+    background-size: 44px 100%;
+    animation: barstripe 0.8s linear infinite;
+  }
+  .healthbar.installing .good.filled::before { animation: none; opacity: 0; }
+  @keyframes barstripe { to { background-position: 44px 0; } }
+  @media (prefers-reduced-motion: reduce) { .healthbar.installing .good::before { animation: none; } }
+  .divider { height: 1px; }
+  .rundiv { height: 1px; margin: 2px 16px; }
+  .runs { padding: 4px 0; max-height: 340px; overflow-y: auto; }
+  .shell.window .runs { max-height: none; }
+  .run { padding: 2px 8px; }
+  .row { display: flex; align-items: center; gap: 8px; border-radius: 8px; padding: 5px 8px; min-height: 24px; transition: background 0.2s ease; }
+  .chev { width: 10px; font-size: 9px; flex: none; text-align: center; }
+  .dot { width: 8px; height: 8px; border-radius: 4px; flex: none; }
+  .dot.ok { background: #34C759; } .dot.warn { background: #FF8D28; }
+  .dot.err { background: #FF383C; } .dot.recover { background: #00C8B3; }
+  .dot.paused { background: #E0A33C; }
+  /* the stalled/paused dot is hollow: it's idle, not failed */
+  .dot.paused { background: transparent; box-shadow: inset 0 0 0 2px #E0A33C; }
+  .run-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-id { font-size: 10px; }
+  .chip { margin-left: auto; font-size: 10px; line-height: 13px; font-weight: 600; padding: 1.5px 7px; border-radius: 99px; flex: none; }
+  .chip.warn { color: #B25000; background: rgba(255,141,40,0.16); }
+  .chip.ok   { color: #1B7A33; background: rgba(52,199,89,0.16); }
+  .dark .chip.warn { color: #FFB067; } .dark .chip.ok { color: #6FE08B; }
+  .chip.recover { color: #067A6A; background: rgba(0,200,179,0.16); }
+  .dark .chip.recover { color: #4CE0B3; }
+  .agents { padding: 0 0 2px 26px; }
+  .agent-block { border-radius: 8px; }
+  .light .agent-block.open { background: rgba(0,0,0,0.03); }
+  .dark .agent-block.open { background: rgba(255,255,255,0.035); }
+  .agent { display: flex; align-items: center; gap: 8px; padding: 3px 8px; border-radius: 6px; min-height: 26px; transition: background 0.15s ease; }
+  .agent .aname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent .astate { margin-left: auto; font-size: 11px; }
+
+  /* one calm activity line under a run (the narrator). tertiary, not mono, not a log. */
+  .noteline { padding: 0 8px 4px 34px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* the caller: the human's claude session that launched the run. A small tag + last line. */
+  .callerline {
+    display: flex; align-items: center; gap: 7px; padding: 2px 8px 4px 34px; font-size: 11px;
+    border-radius: 6px; transition: background 0.15s ease;
+  }
+  .light .callerline:hover { background: rgba(0,0,0,0.04); } .dark .callerline:hover { background: rgba(255,255,255,0.05); }
+  .caller-tag { flex: none; font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 99px; }
+  .light .caller-tag { background: rgba(0,0,0,0.07); color: rgba(0,0,0,0.5); }
+  .dark .caller-tag { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.55); }
+  .caller-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .light .caller-text { color: rgba(0,0,0,0.5); } .dark .caller-text { color: rgba(255,255,255,0.5); }
+  .caller-more { padding: 0 8px 6px 41px; font-size: 11px; }
+  .light .caller-more { color: rgba(0,0,0,0.42); } .dark .caller-more { color: rgba(255,255,255,0.42); }
+  .caller-more div { padding: 1px 0; }
+
+  /* the state word carries colour only for the states that need attention */
+  .t-err { color: #D9542F; } .dark .t-err { color: #FF9E7A; }
+  .t-warn { color: #B4791A; } .dark .t-warn { color: #F0B44C; }
+  .t-recover { color: #0A8F80; } .dark .t-recover { color: #4CE0B3; }
+
+  /* duration + context meter, right of the state, tabular, quiet */
+  .meta { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+  .dur { font-size: 11px; font-variant-numeric: tabular-nums; }
+  .light .dur { color: rgba(0,0,0,0.42); } .dark .dur { color: rgba(255,255,255,0.45); }
+  .ctx { position: relative; width: 26px; height: 5px; border-radius: 3px; overflow: hidden; flex: none; }
+  .light .ctx { background: rgba(0,0,0,0.1); } .dark .ctx { background: rgba(255,255,255,0.14); }
+  .ctx-fill { position: absolute; inset: 0; right: auto; background: #3E9C8E; border-radius: 3px; }
+  .ctx.warm .ctx-fill { background: #E0A33C; } .ctx.hot .ctx-fill { background: #E0603C; }
+
+  /* terminal reveal: hidden until the run row is hovered (no clutter at rest) */
+  .termbtn {
+    flex: none; width: 22px; height: 20px; border: none; background: transparent; color: inherit;
+    border-radius: 6px; opacity: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+    transition: opacity 0.15s ease, background 0.15s ease;
+  }
+  .row:hover .termbtn { opacity: 0.6; }
+  .termbtn:hover { opacity: 1 !important; }
+  .light .termbtn:hover { background: rgba(0,0,0,0.08); } .dark .termbtn:hover { background: rgba(255,255,255,0.12); }
+
+  /* the expandable transcript panel (progressive disclosure; click the agent row) */
+  .tail-panel {
+    max-height: 0; overflow: hidden; margin: 0 8px 0 24px; border-radius: 8px;
+    transition: max-height 0.26s cubic-bezier(0.2,0.8,0.2,1), margin 0.26s ease;
+  }
+  .tail-panel.open { max-height: 150px; margin-top: 2px; margin-bottom: 6px; }
+  .tail-panel-inner {
+    padding: 8px 10px; font-size: 10.5px; line-height: 16px; white-space: pre-wrap; word-break: break-word;
+    max-height: 150px; overflow-y: auto;
+  }
+  .light .tail-panel-inner { background: rgba(0,0,0,0.05); color: rgba(0,0,0,0.6); }
+  .dark .tail-panel-inner { background: rgba(0,0,0,0.26); color: rgba(255,255,255,0.6); }
+  .logline { padding: 1px 0; }
+  .logline.logerr { color: #D9542F; } .dark .logline.logerr { color: #FF9E7A; }
+  .logline:last-child { font-weight: 500; }
+  .light .logline:last-child { color: rgba(0,0,0,0.82); } .dark .logline:last-child { color: rgba(255,255,255,0.9); }
+  @media (prefers-reduced-motion: reduce) { .tail-panel { transition: none; } }
+  .btn { font-size: 11px; line-height: 24px; height: 24px; font-weight: 500; padding: 0 11px; border-radius: 12px; border: none; flex: none; color: inherit; transition: background 0.2s ease; font-family: inherit; }
+  .btn.primary { background: #00C8B3; color: #06312A; font-weight: 600; }
+  .btn.primary:hover { background: #00DAC3; }
+  .btn.primary:active { background: #00B4A1; }
+  .btn:focus-visible { outline: 2px solid #00C8B3; outline-offset: 1px; }
+  .runactions { display: flex; gap: 6px; padding: 4px 8px 8px 34px; }
+  .footer { display: flex; align-items: center; gap: 10px; padding: 9px 16px; font-size: 11px; }
+  .footer .quit { margin-left: auto; border-radius: 6px; padding: 2px 6px; transition: background 0.2s ease; }
+  .light .footer .quit:hover { background: rgba(0,0,0,0.06); }
+  .dark .footer .quit:hover { background: rgba(255,255,255,0.09); }
+  .stale { padding: 8px 16px 10px; font-size: 11px; line-height: 15px; }
+  .stale b { font-weight: 600; }
+  .empty { padding: 34px 24px 38px; text-align: center; }
+  .empty .pulse-big { width: 56px; height: 32px; margin: 0 auto 12px; }
+  .empty p { margin-top: 4px; }
+  .quiet-dim .runs { opacity: 0.55; }
+
+  /* ---------- dev bar ---------- */
+  .devbar {
+    position: fixed; z-index: 50; bottom: 18px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 4px; padding: 6px;
+    background: rgba(22,24,30,0.82); backdrop-filter: blur(20px);
+    border-radius: 14px; box-shadow: 0 10px 34px rgba(0,0,0,0.45), 0 0 0 0.5px rgba(255,255,255,0.08);
+  }
+  .devbar .label { font-size: 10px; font-weight: 600; color: rgba(255,255,255,0.4); padding: 0 8px 0 6px; }
+  .devbar button {
+    font: 11px/1 -apple-system, sans-serif; font-weight: 500; color: rgba(255,255,255,0.8);
+    background: transparent; border: none; border-radius: 8px; padding: 7px 11px;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .devbar button:hover { background: rgba(255,255,255,0.1); }
+  .devbar button.active { background: #00C8B3; color: #06312A; font-weight: 600; }
+  .devbar .sep { width: 1px; height: 16px; background: rgba(255,255,255,0.12); margin: 0 4px; }
+  .devbar .hint { font-size: 10px; color: rgba(255,255,255,0.35); padding: 0 8px; }
+</style>
+</head>
+<body>
+<div class="desktop" id="desktop">
+  <div class="menubar">
+    <span class="apple"></span>
+    <span class="appname">Finder</span>
+    <span>File</span><span>Edit</span><span>View</span><span>Go</span><span>Window</span><span>Help</span>
+    <span class="spacer"></span>
+    <div class="tray">
+      <div class="statusitem" id="statusitem" title="lifeline">
+        <svg viewBox="0 0 44 28" fill="none" id="statusicon"><path id="statuspath" d="M2 18 L14 18 L17 20 L20 18 L23 18 L27 6 L31 22 L34 13 L42 13" stroke="#FFFFFF" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <span></span>
+      <span class="clock" id="clock">Thu 7 Aug 20:24</span>
+    </div>
+  </div>
+
+  <div class="arrow dark-arrow" id="arrow"></div>
+  <div class="shell dark" id="shell">
+    <div class="titlebar" id="titlebar">
+      <span class="lights">
+        <span class="light-dot r" id="closewin"></span>
+        <span class="light-dot y"></span>
+        <span class="light-dot g"></span>
+      </span>
+      <span class="wtitle">lifeline</span>
+    </div>
+    <div id="content"></div>
+  </div>
+
+  <div class="devbar">
+    <span class="label">STATE</span>
+    <button data-state="setup">Not installed</button>
+    <button data-state="installing">Installing</button>
+    <button data-state="healthy">Healthy</button>
+    <button data-state="warning" class="active">Warning</button>
+    <button data-state="empty">Empty</button>
+    <button data-state="quiet">Daemon quiet</button>
+    <span class="sep"></span>
+    <button data-appearance="dark" class="active">Dark</button>
+    <button data-appearance="light">Light</button>
+    <span class="sep"></span>
+    <button id="resetbtn">Reset</button>
+    <span class="hint">click the pulse · drag the popover to tear off</span>
+  </div>
+</div>
+
+<script>
+/* ---------- fixtures: one StatusSnapshot per selectable state ---------- */
+const FIXTURES = {
+  healthy: {
+    online: true, quiet: false,
+    summary: "2 workflows tracked · all healthy", healthy: 1,
+    runs: [
+      { name: "perch", id: "wf_795d98f2", state: "recovering", chip: "recover", dot: "recover", expanded: false, agents: [] },
+      { name: "finance", id: "wf_b7d92af6", state: "completed", chip: "ok", dot: "ok", expanded: false, agents: [] },
+    ],
+  },
+  warning: {
+    online: true, quiet: false,
+    summary: "2 workflows tracked · 1 needs a look", healthy: 0.875,
+    runs: [
+      { name: "perch", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: true,
+        dur: "14m", ctx: 0.62, term: "Ghostty",
+        note: "waiting on work PH-009 before merge",
+        caller: ["Kicked off the perch fleet: 4 agents across the review dimensions", "Watching for the verify gate before I merge"],
+        agents: [
+          { name: "merge PH-004", dot: "ok", state: "done", dur: "3m 20s", ctx: 0.41, tail: [
+            "Rebased ai/ph-004 onto staging (2 files)",
+            "Gate: typecheck passed, lint passed, e2e passed",
+            "Merged PH-004 into staging at c4442c8",
+          ]},
+          { name: "work PH-013", dot: "recover", state: "retrying 3/30", dur: "6m 02s", ctx: 0.58, tail: [
+            "Editing src/daemon/ledger.ts (hunk 3/5)",
+            "Running vitest test/unit/ledger.test.ts",
+            "API Error: 529 Overloaded. lifeline retrying in 12s (attempt 3/30)",
+          ]},
+          { name: "work PH-009", dot: "err", state: "failed", retry: true, dur: "8m 47s", ctx: 0.73, tail: [
+            "Reading src/gateway/server.ts",
+            "Drafting the SSE retry decision",
+            "API Error: Unable to connect to API (ConnectionRefused)",
+          ]},
+          { name: "work PH-011", dot: "ok", state: "running", dur: "5m 11s", ctx: 0.49, tail: [
+            "Wiring src/cli/index.ts subcommands",
+            "Added the lifeline queue add handler",
+          ]},
+          { name: "work PH-015", dot: "paused", state: "stalled 11m", dur: "19m 30s", ctx: 0.9, tail: [
+            "Editing src/reframe/pipeline.ts",
+            "No output or context change for 11 minutes",
+            "lifeline: flagged as stalled, will nudge then relaunch",
+          ]},
+        ]},
+      { name: "finance", id: "wf_b7d92af6", state: "running", chip: "ok", dot: "ok", expanded: false,
+        dur: "7m", ctx: 0.38, term: "Terminal", note: "implement, 5 agents working", agents: [] },
+    ],
+  },
+  empty: { online: true, quiet: false, summary: null, healthy: 1, runs: [] },
+  setup: { setup: true },
+  installing: { setup: true, installing: true },
+  quiet: {
+    online: false, quiet: true,
+    summary: null, healthy: 0.875,
+    runs: [
+      { name: "perch", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: false, agents: [] },
+    ],
+  },
+};
+
+const PULSE = 'M2 18 L14 18 L17 20 L20 18 L23 18 L27 6 L31 22 L34 13 L42 13';
+const FLAT  = 'M2 18 L42 18';
+const TERM_ICON = `<svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 6.5 L6.5 8 L4.5 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 9.7 H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`;
+
+/* duration + a compact context-window meter, right-aligned, tabular, dim: the two live
+   numbers that matter per row without adding a line. The meter warms toward amber as the
+   context fills (a full context is the quiet reason an agent is about to derail). */
+function meta(dur, ctx) {
+  if (dur == null && ctx == null) return "";
+  let out = `<span class="meta">`;
+  if (dur != null) out += `<span class="dur">${dur}</span>`;
+  if (ctx != null) {
+    const pct = Math.round(ctx * 100);
+    const warm = ctx >= 0.85 ? "hot" : ctx >= 0.7 ? "warm" : "";
+    out += `<span class="ctx ${warm}" title="Context window ${pct}% full"><span class="ctx-fill" style="width:${pct}%"></span></span>`;
+  }
+  return out + `</span>`;
+}
+
+/* per-agent state word tone: only failure and stall carry colour; the rest stay quiet
+   (the dot already encodes health, so the word needn't shout too). */
+function stateTone(state) {
+  if (/^failed/.test(state)) return "t-err";
+  if (/^stalled/.test(state)) return "t-warn";
+  if (/^retrying/.test(state)) return "t-recover";
+  return "sec";
+}
+
+/* a recessed, monospaced log panel showing the last few transcript lines. Newest at the
+   bottom (reading order for a log). Collapsed by default; height animates open. */
+function tailPanel(lines, open, panelId) {
+  const rows = lines.map((l) => {
+    const e = /API Error|ConnectionRefused|Overloaded|stalled/i.test(l);
+    return `<div class="logline ${e ? "logerr" : ""}">${l}</div>`;
+  }).join("");
+  return `<div class="tail-panel${open ? " open" : ""}" id="${panelId}"><div class="tail-panel-inner mono">${rows}</div></div>`;
+}
+
+const $ = (id) => document.getElementById(id);
+const shell = $("shell"), arrow = $("arrow"), content = $("content"), statusitem = $("statusitem");
+
+let ui = { state: "warning", appearance: "dark", open: false, mode: "popover", winPos: null, learnOpen: false };
+
+/* ---------- render ---------- */
+function pulseSvg(cls, stroke, opacity, flat) {
+  return `<svg class="${cls}" viewBox="0 0 44 28" fill="none"><path d="${flat ? FLAT : PULSE}" stroke="${stroke}" stroke-opacity="${opacity}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+function render() {
+  const fx = FIXTURES[ui.state];
+  const mint = ui.appearance === "dark" ? "#00DAC3" : "#00C8B3";
+
+  shell.classList.toggle("dark", ui.appearance === "dark");
+  shell.classList.toggle("light", ui.appearance === "light");
+  shell.classList.toggle("quiet-dim", !!fx.quiet);
+  arrow.className = `arrow ${ui.appearance === "dark" ? "dark-arrow" : "light-arrow"}${ui.open && ui.mode === "popover" ? " visible" : ""}`;
+
+  /* ---- first-run: the sell. An animated flatline with agents dropping past it, the
+     real 61% number as the hook, and Install as the moment the line comes alive. ---- */
+  if (fx.setup) {
+    content.innerHTML = `<div class="header"><div class="h-top">
+        ${pulseSvg("pulse", "#98A0AB", 1, true)}
+        <span class="h-title">lifeline</span>
+        <span class="pill offline">not set up</span>
+      </div></div>
+      <div class="divider"></div>
+      ${fx.installing ? `
+        <div style="padding: 22px 20px 8px;">
+          <svg id="hero-stage" viewBox="0 0 320 60" style="width:100%; height:44px; display:block; margin-bottom:14px;">
+            <path id="hero-line" d="M10 34 L310 34" stroke="#00C8B3" stroke-width="3" stroke-linecap="round" fill="none"/>
+            <circle id="hero-node" r="4" fill="#EAFFF6" opacity="0"/>
+          </svg>
+          <div style="font-weight:600;" id="install-title">Setting up…</div>
+          <p class="sec" id="install-step" style="margin-top:3px;">Starting the connection helper</p>
+          <div class="healthbar installing" style="margin-top:10px;"><span class="good" id="install-progress" style="width:8%"></span></div>
+        </div>
+      ` : `
+        <div style="padding: 16px 20px 8px;">
+          <svg id="hero-stage" viewBox="0 0 320 68" style="width:100%; height:52px; display:block;">
+            <g id="hero-drops"></g>
+            <path id="hero-line" d="M10 40 L310 40" stroke="#5A6470" stroke-width="3" stroke-linecap="round" fill="none"/>
+          </svg>
+          <div style="font-weight:600; font-size:14px; margin-top:10px;">lifeline isn't set up yet</div>
+          <p class="sec" style="margin-top:6px; line-height:17px;">It sits next to Claude Code and brings back the workflow agents it quietly drops. Setting it up adds three background helpers that:</p>
+          <div style="display:flex; flex-direction:column; gap:8px; margin-top:12px;">
+            <div class="agent" style="padding-left:0;"><span class="dot recover"></span><span>retry rate limits, overloads and dropped connections</span></div>
+            <div class="agent" style="padding-left:0;"><span class="dot recover"></span><span>bring back agents that fall over or stall, and wait out usage caps</span></div>
+            <div class="agent" style="padding-left:0;"><span class="dot recover"></span><span>re-check compatibility whenever Claude Code updates</span></div>
+          </div>
+          <div class="tail-panel${ui.learnOpen ? " open" : ""}" id="learn-panel" style="margin:8px 0 0;">
+            <div class="tail-panel-inner" style="font-family:inherit; font-size:11px; line-height:16px;">
+              <div>Adds three background helpers (a gateway, a watcher, a version check).</div>
+              <div>Points your <span class="mono">claude</span> command through the gateway; <span class="mono">claude</span> stays the command.</div>
+              <div>Never modifies Anthropic's app.</div>
+              <div>Reversible: one command removes everything.</div>
+            </div>
+          </div>
+          <div style="display:flex; gap:8px; margin-top:14px; align-items:center;">
+            <button class="btn primary" id="install-btn" style="height:28px; line-height:28px; border-radius:14px; padding:0 16px; font-size:12px;">Set up lifeline</button>
+            <button class="btn" id="learn-btn" style="height:28px; line-height:28px; border-radius:14px;">${ui.learnOpen ? "Hide details" : "What it changes"}</button>
+          </div>
+        </div>
+      `}
+      <div style="height:8px"></div>
+      <div class="divider"></div>
+      <div class="footer sec"><span>${fx.installing ? "About a minute, and reversible any time." : "Nothing happens until you say so."}</span><span class="quit">Quit lifeline</span></div>`;
+
+    const installBtn = document.getElementById("install-btn");
+    if (installBtn) installBtn.addEventListener("click", () => { setState("installing"); runFakeInstall(); });
+    const learnBtn = document.getElementById("learn-btn");
+    if (learnBtn) learnBtn.addEventListener("click", () => { ui.learnOpen = !ui.learnOpen; render(); });
+    const path = $("statuspath");
+    path.setAttribute("d", FLAT);
+    path.setAttribute("stroke", "rgba(255,255,255,0.45)");
+    statusitem.classList.toggle("open", ui.open && ui.mode === "popover");
+    layout();
+    animateSetupStage(!!fx.installing);
+    return;
+  }
+
+  let html = `<div class="header"><div class="h-top">
+      ${pulseSvg("pulse", fx.quiet ? "#98A0AB" : mint, 1, fx.quiet)}
+      <span class="h-title">lifeline</span>
+      <span class="pill ${fx.quiet || !fx.online ? "offline" : "online"}">${fx.quiet ? "quiet" : fx.online ? "online" : "offline"}</span>
+    </div>`;
+  if (fx.summary) {
+    const good = Math.round(fx.healthy * 1000) / 10;
+    html += `<div class="h-line sec">${fx.summary}</div>
+      <div class="healthbar"><span class="good" style="width:${good}%"></span><span class="bad" style="width:${100 - good}%"></span></div>`;
+  }
+  html += `</div><div class="divider"></div>`;
+
+  if (fx.quiet) {
+    html += `<div class="stale sec"><b>The watcher's gone quiet;</b> last update 4m ago, so what's below might be stale. Run <span class="mono">lifeline doctor</span> in a terminal to check on it.</div>`;
+  }
+
+  if (fx.runs.length === 0) {
+    html += `<div class="empty">
+      ${pulseSvg("pulse-big", "#00C8B3", 0.45, false)}
+      <div>Nothing running right now</div>
+      <p class="sec">Start a workflow in Claude Code and it shows up here, watched.</p>
+    </div>`;
+  } else {
+    html += `<div class="runs">`;
+    fx.runs.forEach((run, i) => {
+      if (i > 0) html += `<div class="rundiv"></div>`;
+      html += `<div class="run"><div class="row" data-run="${i}">
+        <span class="chev sec">${run.expanded ? "▾" : "▸"}</span>
+        <span class="dot ${run.dot}"></span>
+        <span class="run-name">${run.name}</span>
+        <span class="chip ${run.chip}">${run.state}</span>
+        ${run.term ? `<button class="termbtn" data-term="${i}" title="Open the ${run.term} tab running this workflow">${TERM_ICON}</button>` : ""}
+        ${meta(run.dur, run.ctx)}
+      </div>`;
+      // one calm activity line under the run: what the whole run is doing now.
+      if (run.note) {
+        html += `<div class="noteline ter">${run.note}</div>`;
+      }
+      // the caller: the top-level claude session that launched this run. Last line always
+      // shown (dim), click to see the last couple. Distinct from the run's own narrator.
+      if (run.caller && run.caller.length) {
+        html += `<div class="callerline" data-caller="${i}" title="Your Claude session that started this run">
+          <span class="caller-tag">your session</span>
+          <span class="caller-text">${run.caller[run.caller.length - 1]}</span></div>`;
+        if (run.callerOpen && run.caller.length > 1) {
+          html += `<div class="caller-more">${run.caller.slice(0, -1).map((l) => `<div>${l}</div>`).join("")}</div>`;
+        }
+      }
+      if (run.expanded && run.agents.length) {
+        html += `<div class="agents">`;
+        run.agents.forEach((a, j) => {
+          const open = !!a.tailOpen;
+          html += `<div class="agent-block${open ? " open" : ""}">
+            <div class="agent" data-agent="${i}-${j}" title="Show recent output">
+              <span class="dot ${a.dot}"></span><span class="aname">${a.name}</span>
+              <span class="astate ${stateTone(a.state)}">${a.state}</span>
+              ${meta(a.dur, a.ctx)}
+              ${a.retry ? `<button class="btn primary" data-noexpand>Retry</button>` : ""}
+            </div>`;
+          if (a.tail && a.tail.length) {
+            html += tailPanel(a.tail, open, `agenttail-panel-${i}-${j}`);
+          }
+          html += `</div>`;
+        });
+        html += `</div><div class="runactions">
+          <button class="btn">Retry failed agents</button>
+          <button class="btn">Pause run</button></div>`;
+      }
+      html += `</div>`;
+    });
+    html += `</div>`;
+  }
+
+  html += `<div class="divider"></div><div class="footer sec">
+    <span>${fx.quiet ? "Updated 4m ago" : "Updated 2s ago"}</span>
+    <span class="quit">Quit lifeline</span></div>`;
+
+  content.innerHTML = html;
+
+  // expand/collapse a run
+  content.querySelectorAll(".row[data-run]").forEach((row) => {
+    row.addEventListener("click", () => {
+      const run = FIXTURES[ui.state].runs[Number(row.dataset.run)];
+      run.expanded = !run.expanded;
+      render();
+    });
+  });
+  // click an agent row -> reveal its recent output (progressive disclosure)
+  content.querySelectorAll(".agent[data-agent]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-noexpand]")) return; // Retry etc. don't toggle the log
+      e.stopPropagation();
+      const [ri, ai] = el.dataset.agent.split("-").map(Number);
+      const a = FIXTURES[ui.state].runs[ri].agents[ai];
+      a.tailOpen = !a.tailOpen; render();
+    });
+  });
+  // click the caller line -> show the last couple of lines from your claude session
+  content.querySelectorAll(".callerline[data-caller]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const run = FIXTURES[ui.state].runs[Number(el.dataset.caller)];
+      run.callerOpen = !run.callerOpen; render();
+    });
+  });
+  // terminal reveal (mock: just flashes; the real app raises the Ghostty/Terminal tab)
+  content.querySelectorAll(".termbtn[data-term]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      el.animate([{ transform: "scale(1)" }, { transform: "scale(0.82)" }, { transform: "scale(1)" }], { duration: 220 });
+    });
+  });
+
+  // menu-bar icon: shape + tint by state
+  const path = $("statuspath");
+  path.setAttribute("d", fx.quiet ? FLAT : PULSE);
+  path.setAttribute("stroke", fx.quiet ? "rgba(255,255,255,0.45)"
+    : ui.state === "warning" ? "#FFB042" : "#FFFFFF");
+  statusitem.classList.toggle("open", ui.open && ui.mode === "popover");
+
+  layout();
+}
+
+/* ---------- layout: anchor popover under the status item, or place the window ---------- */
+function layout() {
+  if (ui.mode === "popover") {
+    shell.classList.remove("window");
+    shell.classList.toggle("visible", ui.open);
+    const r = statusitem.getBoundingClientRect();
+    const w = 360;
+    let left = Math.min(r.left + r.width / 2 - w / 2, innerWidth - w - 12);
+    shell.style.left = `${left}px`;
+    shell.style.top = `34px`;
+    shell.style.width = "";
+    shell.style.height = "";
+    arrow.style.left = `${r.left + r.width / 2 - 9}px`;
+    arrow.style.top = `27px`;
+    arrow.classList.toggle("visible", ui.open);
+  } else {
+    shell.classList.add("window", "visible");
+    arrow.classList.remove("visible");
+    if (ui.winPos) {
+      shell.style.left = `${ui.winPos.x}px`;
+      shell.style.top = `${ui.winPos.y}px`;
+    }
+  }
+}
+
+/* ---------- open/close ---------- */
+statusitem.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (ui.mode === "window") {
+    // window mode: the status item re-focuses the window (already visible)
+    return;
+  }
+  ui.open = !ui.open;
+  render();
+});
+document.addEventListener("click", (e) => {
+  if (ui.mode === "popover" && ui.open && !shell.contains(e.target) && e.target !== statusitem) {
+    ui.open = false; render();
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && ui.mode === "popover" && ui.open) { ui.open = false; render(); }
+});
+
+/* ---------- drag-to-tear-off + window drag ---------- */
+let drag = null;
+shell.addEventListener("pointerdown", (e) => {
+  if (e.target.closest(".btn") || e.target.closest(".row") || e.target.closest(".quit")) return;
+  if (ui.mode === "window" && !e.target.closest(".titlebar")) return; // window drags by titlebar only
+  const rect = shell.getBoundingClientRect();
+  drag = { startX: e.clientX, startY: e.clientY, offX: e.clientX - rect.left, offY: e.clientY - rect.top, torn: ui.mode === "window" };
+  shell.setPointerCapture(e.pointerId);
+});
+shell.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
+  if (!drag.torn && Math.hypot(dx, dy) > 40) {
+    // tear off: popover becomes a window at the cursor (system-detach stand-in)
+    drag.torn = true;
+    ui.mode = "window";
+    ui.open = true;
+    shell.classList.add("dragging");
+    render();
+  }
+  if (drag.torn) {
+    ui.winPos = { x: e.clientX - drag.offX, y: Math.max(28, e.clientY - drag.offY) };
+    shell.style.left = `${ui.winPos.x}px`;
+    shell.style.top = `${ui.winPos.y}px`;
+  }
+});
+const endDrag = () => {
+  if (drag && drag.torn) shell.classList.remove("dragging");
+  drag = null;
+};
+shell.addEventListener("pointerup", endDrag);
+shell.addEventListener("pointercancel", endDrag);
+
+/* close the detached window -> back to popover behaviour */
+$("closewin").addEventListener("click", () => {
+  ui.mode = "popover"; ui.open = false; ui.winPos = null; render();
+});
+
+/* ---------- state switching + the fake install sequence ---------- */
+function setState(s) {
+  ui.state = s;
+  document.querySelectorAll(".devbar [data-state]").forEach((x) => x.classList.toggle("active", x.dataset.state === s));
+  if (!ui.open && ui.mode === "popover") ui.open = true;
+  render();
+}
+
+let installTimer = null;
+function runFakeInstall() {
+  // The consent -> progress -> protected sequence the real app performs, narrated.
+  const steps = [
+    [22, "Starting the connection helper"],
+    [46, "Starting the workflow watcher"],
+    [70, "Routing claude through the helper (claude stays your command)"],
+    [92, "Recording a compatibility fingerprint of your Claude Code"],
+    [100, "Set up. lifeline's watching."],
+  ];
+  let i = 0;
+  clearInterval(installTimer);
+  installTimer = setInterval(() => {
+    const bar = document.getElementById("install-progress");
+    const step = document.getElementById("install-step");
+    const title = document.getElementById("install-title");
+    if (!bar || i >= steps.length) { clearInterval(installTimer); if (i >= steps.length) setState("healthy"); return; }
+    bar.style.width = steps[i][0] + "%";
+    step.textContent = steps[i][1];
+    if (i === steps.length - 1) { if (title) title.textContent = "Done"; bar.classList.add("filled"); }
+    i += 1;
+  }, 900);
+}
+
+/* ---------- dev bar ---------- */
+document.querySelectorAll(".devbar [data-state]").forEach((b) =>
+  b.addEventListener("click", () => {
+    clearInterval(installTimer);
+    setState(b.dataset.state);
+    if (b.dataset.state === "installing") runFakeInstall();
+  }));
+document.querySelectorAll(".devbar [data-appearance]").forEach((b) =>
+  b.addEventListener("click", () => {
+    ui.appearance = b.dataset.appearance;
+    document.querySelectorAll(".devbar [data-appearance]").forEach((x) => x.classList.toggle("active", x === b));
+    render();
+  }));
+$("resetbtn").addEventListener("click", () => {
+  ui = { state: "warning", appearance: "dark", open: false, mode: "popover", winPos: null };
+  FIXTURES.warning.runs[0].expanded = true;
+  document.querySelectorAll(".devbar [data-state]").forEach((x) => x.classList.toggle("active", x.dataset.state === "warning"));
+  document.querySelectorAll(".devbar [data-appearance]").forEach((x) => x.classList.toggle("active", x.dataset.appearance === "dark"));
+  render();
+});
+
+/* ---------- URL params for headless capture (mirror the dev bar) ---------- */
+const params = new URLSearchParams(location.search);
+if (params.get("state")) ui.state = params.get("state");
+if (params.get("appearance")) ui.appearance = params.get("appearance");
+if (params.get("open") === "1") ui.open = true;
+if (params.get("mode") === "window") { ui.mode = "window"; ui.winPos = { x: innerWidth / 2 - 260, y: 120 }; }
+document.querySelectorAll(".devbar [data-state]").forEach((x) => x.classList.toggle("active", x.dataset.state === ui.state));
+document.querySelectorAll(".devbar [data-appearance]").forEach((x) => x.classList.toggle("active", x.dataset.appearance === ui.appearance));
+
+/* clock */
+$("clock").textContent = new Date().toLocaleString("en-AU", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+window.addEventListener("resize", layout);
+
+/* ---------- animation engine (GSAP + three.js) ---------- */
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const PULSE_LEN = 88; // approx path length of the beat for draw-on
+
+/* the beat draws itself when the popover opens */
+function animatePulseDraw() {
+  if (reduceMotion || typeof gsap === "undefined") return;
+  const p = content.querySelector(".pulse path");
+  if (!p) return;
+  const len = p.getTotalLength();
+  gsap.fromTo(p, { strokeDasharray: len, strokeDashoffset: len }, {
+    strokeDashoffset: 0, duration: 0.7, ease: "power2.out",
+    onComplete: () => p.removeAttribute("stroke-dasharray"),
+  });
+}
+
+/* count the 61% up, and run the falling-agent flatline story */
+let setupTl = null;
+function animateSetupStage(installing) {
+  if (typeof gsap === "undefined") return;
+  setupTl && setupTl.kill();
+  const stat = document.getElementById("hero-stat");
+  const dropsG = document.getElementById("hero-drops");
+  const line = document.getElementById("hero-line");
+  const node = document.getElementById("hero-node");
+
+  if (stat && !reduceMotion) {
+    const obj = { v: 0 };
+    gsap.to(obj, { v: 61, duration: 1.1, ease: "power1.out", onUpdate: () => stat.textContent = Math.round(obj.v) + "%" });
+  }
+  if (!dropsG || !line) return;
+
+  if (installing) {
+    // the line comes alive: grey -> mint, and a beat rises out of the flat
+    gsap.to(line, { attr: { stroke: "#00C8B3" }, duration: 0.5 });
+    if (!reduceMotion) {
+      const beat = "M10 62 L120 62 L140 62 L160 24 L180 92 L200 54 L230 54 L310 54";
+      gsap.to(line, { attr: { d: beat }, duration: 0.7, ease: "back.out(1.4)", delay: 0.2 });
+      gsap.set(node, { attr: { cx: 160, cy: 24 } });
+      gsap.to(node, { attr: { opacity: 1 }, duration: 0.3, delay: 0.7 });
+      gsap.fromTo(node, { attr: { r: 5 } }, { attr: { r: 9 }, duration: 0.9, delay: 0.9, repeat: -1, yoyo: true, ease: "sine.inOut" });
+    }
+    return;
+  }
+
+  if (reduceMotion) return;
+  // uninstalled: agents (dots) fall from the line and vanish through it — the silent loss.
+  setupTl = gsap.timeline({ repeat: -1, repeatDelay: 0.6 });
+  const xs = [70, 130, 190, 250];
+  xs.forEach((x, i) => {
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", x); c.setAttribute("cy", 62); c.setAttribute("r", 5);
+    c.setAttribute("fill", i === 1 ? "#FF8D28" : "#8A94A2");
+    dropsG.appendChild(c);
+    setupTl.to(c, { attr: { cy: 100 }, opacity: 0, duration: 0.9, ease: "power1.in" }, i * 0.4)
+           .fromTo(c, { attr: { cy: 40 }, opacity: 0 }, { attr: { cy: 62 }, opacity: 1, duration: 0.4, ease: "power1.out" }, "<-0.4");
+  });
+  // the line stays defiantly flat while they fall
+  gsap.set(line, { attr: { d: "M10 62 L310 62", stroke: "#5A6470" } });
+}
+
+/* three.js aurora: a slow, living gradient field behind the desktop */
+function startAurora() {
+  if (reduceMotion || typeof THREE === "undefined" || !THREE.WebGLRenderer) return;
+  const canvas = document.createElement("canvas");
+  canvas.id = "aurora";
+  document.getElementById("desktop").prepend(canvas);
+  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  const scene = new THREE.Scene();
+  const cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const uniforms = { t: { value: 0 }, res: { value: new THREE.Vector2() } };
+  const mat = new THREE.ShaderMaterial({
+    uniforms, transparent: true,
+    vertexShader: `void main(){ gl_Position = vec4(position,1.0); }`,
+    fragmentShader: `
+      precision highp float; uniform float t; uniform vec2 res;
+      // cheap flowing bands in lifeline's mint/teal, very low opacity
+      void main(){
+        vec2 uv = gl_FragCoord.xy/res;
+        float w = sin(uv.x*3.0 + t*0.25) * 0.5 + 0.5;
+        float band = smoothstep(0.35, 0.5, sin(uv.y*4.0 - t*0.4 + w*2.0)*0.5+0.5);
+        vec3 mint = vec3(0.0, 0.78, 0.70);
+        vec3 teal = vec3(0.10, 0.45, 0.55);
+        vec3 col = mix(teal, mint, band);
+        float a = band * 0.16 * smoothstep(0.0, 0.4, uv.y);
+        gl_FragColor = vec4(col, a);
+      }`,
+  });
+  scene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
+  function resize() {
+    const w = innerWidth, h = innerHeight;
+    renderer.setSize(w, h, false); uniforms.res.value.set(w * Math.min(devicePixelRatio,2), h * Math.min(devicePixelRatio,2));
+  }
+  resize(); addEventListener("resize", resize);
+  (function loop(now) { uniforms.t.value = now * 0.001; renderer.render(scene, cam); requestAnimationFrame(loop); })(0);
+}
+
+/* hook the draw-on into open + state changes */
+const _render = render;
+render = function () { _render(); if (ui.open || ui.mode === "window") requestAnimationFrame(animatePulseDraw); };
+
+/* popover pop: a little springy scale on open (GSAP overrides the CSS for extra bounce) */
+const _layout = layout;
+layout = function () {
+  _layout();
+  if (!reduceMotion && typeof gsap !== "undefined" && ui.open && ui.mode === "popover" && shell.classList.contains("visible")) {
+    gsap.fromTo(shell, { scale: 0.9, y: -6 }, { scale: 1, y: 0, duration: 0.34, ease: "back.out(1.7)", clearProps: "scale,translate" });
+  }
+};
+
+/* UI first — decorative layers must never block it (a WebGL failure in a headless or
+   locked-down browser is not a reason for the app to render blank). */
+render();
+try { startAurora(); } catch (e) { /* aurora is optional chrome */ }
+</script>
+</body>
+</html>

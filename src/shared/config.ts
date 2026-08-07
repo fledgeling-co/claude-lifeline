@@ -21,6 +21,10 @@ export interface LifelineConfig {
   probeUrl: string;
   /** How long after a stalled transcript an agent is considered "not live", ms. */
   liveWindowMs: number;
+  /** No new output AND no context change for this long → the agent is stalled. */
+  stallWindowMs: number;
+  /** The model context-window size, tokens, used to compute context-window fill. */
+  contextLimitTokens: number;
 }
 
 export const DEFAULT_CONFIG: LifelineConfig = {
@@ -33,6 +37,8 @@ export const DEFAULT_CONFIG: LifelineConfig = {
   daemonTickMs: 5_000,
   probeUrl: "https://api.anthropic.com/v1/",
   liveWindowMs: 300_000,
+  stallWindowMs: 600_000, // 10 minutes of no output/context change
+  contextLimitTokens: 200_000,
 };
 
 let cached: LifelineConfig | null = null;

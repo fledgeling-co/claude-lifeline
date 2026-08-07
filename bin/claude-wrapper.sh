@@ -61,4 +61,20 @@ elif curl -fsS -m 1 "${GATEWAY_URL}/" >/dev/null 2>&1; then
   export ANTHROPIC_BASE_URL="${GATEWAY_URL}"
 fi
 
+# --- record this terminal so the status app can reveal it ---------------------------
+# The app maps a workflow's controlling tty back to a window/tab. We record, keyed by tty,
+# which terminal program owns it, the cwd, and our pid. Best-effort; never fatal.
+{
+  ll_tty="$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')"
+  if [[ -n "${ll_tty}" && "${ll_tty}" != "??" ]]; then
+    ll_safe="${ll_tty//\//_}"
+    mkdir -p "${LIFELINE_HOME}/terminals" 2>/dev/null || true
+    cat > "${LIFELINE_HOME}/terminals/${ll_safe}.json" 2>/dev/null <<JSON || true
+{"tty":"/dev/${ll_tty}","term":"${TERM_PROGRAM:-unknown}","cwd":"${PWD}","pid":$$,"at":$(date +%s)}
+JSON
+    # A distinctive title makes Ghostty/Warp/Alacritty (which expose no tty) matchable too.
+    printf '\033]2;lifeline · %s\007' "$(basename "${PWD}")" >/dev/tty 2>/dev/null || true
+  fi
+} 2>/dev/null || true
+
 exec "${real_claude}" "$@"

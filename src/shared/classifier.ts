@@ -10,6 +10,7 @@ export type ErrorClass =
   | "USAGE_LIMIT" // session/usage limit, all-accounts-exhausted — park + scheduled retry
   | "CONTEXT" // prompt too long / autocompact thrash — terminal, never blind-retry
   | "AUTH" // 400/401/403/invalid_request — terminal
+  | "STALL" // daemon-synthesized: no output/context change for the stall window — nudge + relaunch
   | "UNKNOWN"; // unclassified — treated conservatively as terminal at the daemon
 
 export interface Classification {

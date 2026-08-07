@@ -539,7 +539,10 @@ describe("recovery e2e", () => {
       "wf_gamma",
     );
     expect(run.state).toBe("running");
-    expect(run.agents).toHaveLength(0);
+    // v2: healthy agents are surfaced with telemetry (names, durations, context) so the UI
+    // can show them; recovery still never fired, so the ledger stays empty.
+    expect(run.agents.map((a) => a.state).sort()).toEqual(["done", "retrying"]);
+    expect(Object.keys(loadLedger("wf_gamma").entries)).toHaveLength(0);
     expect(calls).toHaveLength(0);
     expect(renderStatus(snapshot, { color: false, now: clock })).not.toMatch(/\bwarning\b/);
   });

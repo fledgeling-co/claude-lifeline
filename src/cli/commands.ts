@@ -55,6 +55,8 @@ export interface CommandDeps {
   probeGateway(url: string): Promise<GatewayProbe>;
   checkDaemon(cfg: LifelineConfig, now: number): DaemonCheck;
   readIncompat(): IncompatFlag | null;
+  /** Whether the optional menu-bar status window is installed. */
+  checkMenubar(): { installed: boolean };
   newId(): string;
 }
 
@@ -146,8 +148,17 @@ export function defaultDeps(): CommandDeps {
     probeGateway: defaultProbeGateway,
     checkDaemon: defaultCheckDaemon,
     readIncompat: defaultReadIncompat,
+    checkMenubar: defaultCheckMenubar,
     newId: () => randomUUID(),
   };
+}
+
+function defaultCheckMenubar(): { installed: boolean } {
+  try {
+    return { installed: statSync(join(paths.home(), "bin", "lifeline-menubar")).isFile() };
+  } catch {
+    return { installed: false };
+  }
 }
 
 export function errorMessage(err: unknown): string {
@@ -371,6 +382,18 @@ export async function doctorCommand(deps: CommandDeps = defaultDeps()): Promise<
         ? "no incompatibility flagged"
         : `unsupported version ${incompat.version ?? "unknown"} — lifeline running in reduced mode` +
           (incompat.reason != null ? ` (${incompat.reason})` : ""),
+  });
+
+  // The status window is optional (needs swiftc at install time), so its absence is a
+  // plain note, never a failure.
+  const menubar = deps.checkMenubar();
+  checks.push({
+    id: "menubar",
+    label: "status window",
+    level: "ok",
+    detail: menubar.installed
+      ? "menu-bar app installed (look for the pulse in your menu bar)"
+      : "not installed — optional; install Xcode Command Line Tools and re-run install.sh to add it",
   });
 
   const hardFailure = checks.some((c) => c.level === "fail");
