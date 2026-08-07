@@ -87,6 +87,10 @@ export interface RunScan {
   startedAtMs: number | null;
   /** Last cleaned lines of the top-level claude session that launched this run. */
   callerTail: string[];
+  /** The workflow's own name (meta.name), e.g. "perch-fleet-run7". */
+  workflowName: string | null;
+  /** The workspace (repo) the run worked in, e.g. "diolog-swe-bench" — basename of cwd. */
+  workspace: string | null;
 }
 
 export interface StalledAgent {
@@ -435,6 +439,39 @@ interface RunSnapshot {
   scriptPath?: unknown;
   args?: unknown;
   workflowProgress?: unknown;
+  workflowName?: unknown;
+}
+
+/**
+ * The workflow's own name (its script `meta.name`). Prefer the snapshot's `workflowName`;
+ * for a live run with no snapshot yet, derive it from the persisted script filename, which
+ * is `<name>-<runId>.js` under `<session>/workflows/scripts/`.
+ */
+export function deriveWorkflowName(
+  sessionDir: string,
+  runId: string,
+  snapshot: RunSnapshot | null,
+): string | null {
+  if (snapshot && typeof snapshot.workflowName === "string" && snapshot.workflowName) {
+    return snapshot.workflowName;
+  }
+  try {
+    const scriptsDir = join(sessionDir, "workflows", "scripts");
+    const suffix = `-${runId}.js`;
+    for (const f of readdirSync(scriptsDir)) {
+      if (f.endsWith(suffix)) return f.slice(0, -suffix.length);
+    }
+  } catch {
+    /* no scripts dir yet */
+  }
+  return null;
+}
+
+/** The workspace (repo) name from a cwd path, e.g. /Users/x/Dev/perch -> "perch". */
+export function workspaceFromCwd(cwd: string | null): string | null {
+  if (!cwd) return null;
+  const parts = cwd.split("/").filter((p) => p.length > 0);
+  return parts.at(-1) ?? null;
 }
 
 export interface ScanOptions {
@@ -580,6 +617,8 @@ export function scanRunDir(runDir: string, opts: ScanOptions): RunScan | null {
     agents,
     startedAtMs,
     callerTail: readCallerTail(parts.sessionDir, 2),
+    workflowName: deriveWorkflowName(parts.sessionDir, parts.runId, snapshot),
+    workspace: workspaceFromCwd(cwd),
   };
 }
 

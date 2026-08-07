@@ -25,6 +25,14 @@ export interface LifelineConfig {
   stallWindowMs: number;
   /** The model context-window size, tokens, used to compute context-window fill. */
   contextLimitTokens: number;
+  /** A run is "recently active" (and shown) if its transcripts changed within this window. */
+  discoverWindowMs: number;
+  /** How often the full run-discovery walk runs (heavier than a tick, so less often). */
+  discoverIntervalMs: number;
+  /** Keep showing a finished run this long after its last activity, then drop it. */
+  retentionMs: number;
+  /** Most recent runs to show (by last activity); older ones are omitted. */
+  maxRunsShown: number;
 }
 
 export const DEFAULT_CONFIG: LifelineConfig = {
@@ -39,6 +47,10 @@ export const DEFAULT_CONFIG: LifelineConfig = {
   liveWindowMs: 300_000,
   stallWindowMs: 600_000, // 10 minutes of no output/context change
   contextLimitTokens: 200_000,
+  discoverWindowMs: 3 * 60 * 60_000, // show workflow runs active in the last 3 hours
+  discoverIntervalMs: 12_000, // full-tree discovery walk cadence
+  retentionMs: 3 * 60 * 60_000, // keep a run visible as long as it's within the window
+  maxRunsShown: 30, // cap the list to the most recent runs
 };
 
 let cached: LifelineConfig | null = null;

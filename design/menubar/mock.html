@@ -168,6 +168,9 @@
   /* the stalled/paused dot is hollow: it's idle, not failed */
   .dot.paused { background: transparent; box-shadow: inset 0 0 0 2px #E0A33C; }
   .run-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* the run shows its workflow name (bold) with the workspace/repo beneath, small + dim */
+  .run-names { display: flex; flex-direction: column; min-width: 0; gap: 0; line-height: 1.15; }
+  .run-ws { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run-id { font-size: 10px; }
   .chip { margin-left: auto; font-size: 10px; line-height: 13px; font-weight: 600; padding: 1.5px 7px; border-radius: 99px; flex: none; }
   .chip.warn { color: #B25000; background: rgba(255,141,40,0.16); }
@@ -331,15 +334,15 @@ const FIXTURES = {
     online: true, quiet: false,
     summary: "2 workflows tracked · all healthy", healthy: 1,
     runs: [
-      { name: "perch", id: "wf_795d98f2", state: "recovering", chip: "recover", dot: "recover", expanded: false, agents: [] },
-      { name: "finance", id: "wf_b7d92af6", state: "completed", chip: "ok", dot: "ok", expanded: false, agents: [] },
+      { name: "perch", wf: "perch-close-the-five", id: "wf_795d98f2", state: "recovering", chip: "recover", dot: "recover", expanded: false, agents: [] },
+      { name: "finance", wf: "finance-fleet-42", id: "wf_b7d92af6", state: "completed", chip: "ok", dot: "ok", expanded: false, agents: [] },
     ],
   },
   warning: {
     online: true, quiet: false,
     summary: "2 workflows tracked · 1 needs a look", healthy: 0.875,
     runs: [
-      { name: "perch", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: true,
+      { name: "perch", wf: "perch-fleet-run7", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: true,
         dur: "14m", ctx: 0.62, term: "Ghostty",
         note: "waiting on work PH-009 before merge",
         caller: ["Kicked off the perch fleet: 4 agents across the review dimensions", "Watching for the verify gate before I merge"],
@@ -369,7 +372,7 @@ const FIXTURES = {
             "lifeline: flagged as stalled, will nudge then relaunch",
           ]},
         ]},
-      { name: "finance", id: "wf_b7d92af6", state: "running", chip: "ok", dot: "ok", expanded: false,
+      { name: "finance", wf: "finance-fleet-42", id: "wf_b7d92af6", state: "running", chip: "ok", dot: "ok", expanded: false,
         dur: "7m", ctx: 0.38, term: "Terminal", note: "implement, 5 agents working", agents: [] },
     ],
   },
@@ -380,7 +383,7 @@ const FIXTURES = {
     online: false, quiet: true,
     summary: null, healthy: 0.875,
     runs: [
-      { name: "perch", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: false, agents: [] },
+      { name: "perch", wf: "perch-fleet-run7", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: false, agents: [] },
     ],
   },
 };
@@ -534,7 +537,10 @@ function render() {
       html += `<div class="run"><div class="row" data-run="${i}">
         <span class="chev sec">${run.expanded ? "▾" : "▸"}</span>
         <span class="dot ${run.dot}"></span>
-        <span class="run-name">${run.name}</span>
+        <span class="run-names">
+          <span class="run-name">${run.wf || run.name}</span>
+          <span class="run-ws ter">${run.name}</span>
+        </span>
         <span class="chip ${run.chip}">${run.state}</span>
         ${run.term ? `<button class="termbtn" data-term="${i}" title="Open the ${run.term} tab running this workflow">${TERM_ICON}</button>` : ""}
         ${meta(run.dur, run.ctx)}

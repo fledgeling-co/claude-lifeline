@@ -69,6 +69,10 @@ export interface StatusSnapshot {
 export interface StatusRun {
   runId: string;
   project: string;
+  /** The workflow's own name (meta.name), e.g. "perch-fleet-run7". */
+  workflowName?: string | null;
+  /** The workspace (repo) name, e.g. "diolog-swe-bench". */
+  workspace?: string | null;
   state: RunState;
   agents: StatusAgent[];
   /** Elapsed wall-clock of the run so far, ms (earliest agent activity → now). */
