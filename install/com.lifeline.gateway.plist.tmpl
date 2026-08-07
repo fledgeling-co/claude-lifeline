@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The gateway. Rendered by install.sh with @@ placeholders replaced. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lifeline.gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@@NODE@@</string>
+    <string>@@LIFELINE_DIR@@/dist/gateway/server.js</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LIFELINE_HOME</key>
+    <string>@@LIFELINE_HOME@@</string>
+    <key>LIFELINE_GATEWAY_PORT</key>
+    <string>@@GATEWAY_PORT@@</string>
+    <key>PATH</key>
+    <string>@@PATH@@</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>@@LIFELINE_HOME@@/logs/gateway.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@@LIFELINE_HOME@@/logs/gateway.err.log</string>
+</dict>
+</plist>

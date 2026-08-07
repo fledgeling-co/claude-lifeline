@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The version watcher: re-fingerprints the CLI contract when Claude Code updates.
+     WatchPaths fires the job whenever the versions directory changes. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lifeline.watcher</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@@NODE@@</string>
+    <string>@@LIFELINE_DIR@@/dist/fingerprint/watch.js</string>
+    <string>--once</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LIFELINE_HOME</key>
+    <string>@@LIFELINE_HOME@@</string>
+    <key>PATH</key>
+    <string>@@PATH@@</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>WatchPaths</key>
+  <array>
+    <string>@@CLAUDE_VERSIONS_DIR@@</string>
+  </array>
+  <key>StandardOutPath</key>
+  <string>@@LIFELINE_HOME@@/logs/watcher.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@@LIFELINE_HOME@@/logs/watcher.err.log</string>
+</dict>
+</plist>

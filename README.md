@@ -71,14 +71,17 @@ v1 is the resilience core, the part that kills the top three failure modes above
 - auto-retry with backoff and the 30-attempt ledger
 - usage-limit and accounts-exhausted recovery
 - silent-loss detection and resume
+- the MCP server that teaches Claude's own model to check status, retry, pause, and resume
 - the one-command installer and fail-closed version check
 - the fault-injection eval harness
 
 Staged after that:
 
-- **the control plane UI**: pause/resume/enqueue and the red-cross-to-warning view
+- **the control-plane UI**: the richer status view and the red-cross-to-warning display, plus enqueue/dequeue of work in a running workflow
 - **templating**: save and reuse your common workflows
 - **an optional deeper hook** for the npm/`node` install of Claude Code, where the built-in view itself can be recoloured
+
+(Messaging a specific running agent already works natively in Claude Code via SendMessage; lifeline doesn't duplicate it.)
 
 I'd rather ship the core that stops the bleeding first and be honest that the rest is coming, than claim the whole thing on day one.
 

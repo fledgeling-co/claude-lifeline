@@ -1,0 +1,48 @@
+{
+  "name": "@lprhodes/lifeline",
+  "version": "0.1.0",
+  "description": "A resilience and recovery layer for the Claude Code CLI's Workflow feature.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Luke Rhodes",
+  "homepage": "https://github.com/lprhodes/lifeline",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lprhodes/lifeline.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "lifeline": "dist/cli/index.js",
+    "lifeline-gw": "dist/gateway/server.js",
+    "lifelined": "dist/daemon/index.js"
+  },
+  "files": [
+    "dist",
+    "install",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "chokidar": "^4.0.3",
+    "commander": "^14.0.1",
+    "undici": "^7.16.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@sinonjs/fake-timers": "^15.0.0",
+    "@types/node": "^22.10.10",
+    "fast-check": "^4.3.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
