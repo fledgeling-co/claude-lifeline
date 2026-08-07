@@ -1,0 +1,85 @@
+name: release
+
+# Cut a release by pushing a tag, e.g.  git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release + upload assets
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build + test
+        run: |
+          npm install --no-audit --no-fund
+          npm run typecheck
+          npm run build
+          npm test
+
+      # Signing + notarization run only when the repo has the secrets configured; without them
+      # the job still publishes an ad-hoc-signed build (fine for local use, but Gatekeeper will
+      # warn). To ship a notarized build set these repo secrets:
+      #   MACOS_CERT_P12_BASE64  base64 of your "Developer ID Application" .p12
+      #   MACOS_CERT_PASSWORD    the .p12 export password
+      #   DEVELOPER_ID_APP       the identity name, e.g. "Developer ID Application: Name (TEAMID)"
+      #   APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD  for the notary service
+      - name: Import Developer ID certificate
+        if: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KPASS="$(uuidgen)"
+          security create-keychain -p "$KPASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KPASS" "$KEYCHAIN"
+          echo "$MACOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KPASS" "$KEYCHAIN" >/dev/null
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      - name: Package + notarize the app
+        env:
+          DEVELOPER_ID_APP: ${{ secrets.DEVELOPER_ID_APP }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          # Defence-in-depth: only ever act on a well-formed version tag. VERSION is a shell
+          # variable (never templated into the script), so this is a validation, not an escape.
+          case "$VERSION" in
+            v[0-9]*) ;;
+            *) echo "refusing to release from unexpected tag: $VERSION"; exit 1 ;;
+          esac
+          bash scripts/package-app.sh "$VERSION" dist-app
+          bash scripts/notarize.sh dist-app/lifeline.app "dist-app/lifeline-${VERSION}.zip"
+          shasum -a 256 "dist-app/lifeline-${VERSION}.zip" > "dist-app/lifeline-${VERSION}.zip.sha256"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME}"
+          gh release create "$VERSION" \
+            --title "lifeline ${VERSION}" \
+            --generate-notes \
+            --notes-start-tag "$(git describe --tags --abbrev=0 "${VERSION}^" 2>/dev/null || echo '')" \
+            "dist-app/lifeline-${VERSION}.zip" \
+            "dist-app/lifeline-${VERSION}.zip.sha256" \
+            install.sh \
+            uninstall.sh

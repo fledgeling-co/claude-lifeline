@@ -124,6 +124,9 @@ say "real Claude Code binary: ${real_target}"
 
 # Install the wrapper and repoint the launcher.
 install -m 0755 "${SRC}/bin/claude-wrapper.sh" "${LIFELINE_HOME}/claude-wrapper.sh"
+# Keep a copy of the uninstaller where the menu-bar app's "Uninstall" action looks for it.
+install -m 0755 "${SRC}/uninstall.sh" "${LIFELINE_HOME}/uninstall.sh" 2>/dev/null \
+  || cp "${SRC}/uninstall.sh" "${LIFELINE_HOME}/uninstall.sh" 2>/dev/null || true
 if [[ -e "${CLAUDE_LINK}" || -L "${CLAUDE_LINK}" ]]; then
   cp -a "${CLAUDE_LINK}" "${LIFELINE_HOME}/claude.pre-lifeline.bak" 2>/dev/null || true
   rm -f "${CLAUDE_LINK}"
@@ -204,9 +207,12 @@ say "installed. Running a health check:"
 cat <<EOF
 
 lifeline is set up. Your command is still 'claude'.
+  - restart any running 'claude' sessions so they route through lifeline (new ones already do)
   - status:  lifeline status
   - health:  lifeline doctor
-  - remove:  curl -fsSL https://raw.githubusercontent.com/fledgeling-co/claude-lifeline/main/uninstall.sh | bash
+  - remove:  uninstall from the menu-bar app (the ··· menu), or run:
+             curl -fsSL https://raw.githubusercontent.com/fledgeling-co/claude-lifeline/main/uninstall.sh | bash
+             (quitting the app does NOT remove the patch — uninstall does)
 
 Note: if you set ANTHROPIC_API_KEY directly, claude bypasses the gateway and lifeline
 can't heal transport errors on that path. 'lifeline doctor' will warn you if so.
