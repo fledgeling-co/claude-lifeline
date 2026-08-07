@@ -9,11 +9,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Load local release secrets (signing identity, bundle id) if present. CI passes these as env
+# instead; either way the vars below win over the built-in defaults.
+[ -f "${ROOT}/.env.local" ] && set -a && . "${ROOT}/.env.local" && set +a
 VERSION="${1:-${VERSION:-0.0.0-dev}}"
 VERSION="${VERSION#v}" # tolerate a leading v from a git tag
 OUT="${2:-${ROOT}/dist-app}"
 APP="${OUT}/lifeline.app"
-BUNDLE_ID="co.fledgeling.lifeline"
+BUNDLE_ID="${BUNDLE_ID:-lifeline.fledgeling.app}"
 
 echo "==> packaging lifeline.app  version=${VERSION}"
 rm -rf "${APP}"
@@ -70,6 +73,15 @@ PLIST
 # 5. Sign. Developer ID + hardened runtime when the identity is present (needed to notarize),
 # otherwise an ad-hoc signature so it at least launches locally.
 if [[ -n "${DEVELOPER_ID_APP:-}" ]]; then
+  # Import the signing cert into the login keychain if the identity isn't already available
+  # (first local build on a fresh machine). CI imports into its own keychain separately.
+  if ! security find-identity -v -p codesigning 2>/dev/null | grep -qF "${DEVELOPER_ID_APP}"; then
+    if [[ -n "${DEV_ID_CERT_P12:-}" && -f "${ROOT}/${DEV_ID_CERT_P12}" ]]; then
+      echo "--> importing Developer ID certificate into the login keychain"
+      security import "${ROOT}/${DEV_ID_CERT_P12}" -P "${DEV_ID_CERT_PASSWORD:-}" \
+        -T /usr/bin/codesign -k "${HOME}/Library/Keychains/login.keychain-db" >/dev/null 2>&1 || true
+    fi
+  fi
   echo "--> signing with Developer ID (hardened runtime)"
   codesign --force --deep --options runtime --timestamp \
     --sign "${DEVELOPER_ID_APP}" "${APP}"

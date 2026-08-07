@@ -9,3 +9,11 @@ coverage/
 .env.*
 dist-app/
 *.app
+
+# local secrets (never commit)
+.env.local
+.env.*.local
+.secrets/
+*.p8
+*.p12
+/main

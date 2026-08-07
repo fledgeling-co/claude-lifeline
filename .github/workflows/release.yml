@@ -26,11 +26,14 @@ jobs:
 
       # Signing + notarization run only when the repo has the secrets configured; without them
       # the job still publishes an ad-hoc-signed build (fine for local use, but Gatekeeper will
-      # warn). To ship a notarized build set these repo secrets:
-      #   MACOS_CERT_P12_BASE64  base64 of your "Developer ID Application" .p12
-      #   MACOS_CERT_PASSWORD    the .p12 export password
+      # warn). To ship a notarised build set these repo secrets:
+      #   MACOS_CERT_P12_BASE64  base64 of the "Developer ID Application" .p12
+      #   MACOS_CERT_PASSWORD    the .p12 import password (empty string if none)
       #   DEVELOPER_ID_APP       the identity name, e.g. "Developer ID Application: Name (TEAMID)"
-      #   APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD  for the notary service
+      # And, to authenticate to the notary service, EITHER an App Store Connect API key:
+      #   MACOS_ASC_KEY_P8_BASE64 / ASC_KEY_ID / ASC_ISSUER_ID   (preferred)
+      # OR an Apple ID app password:
+      #   APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD
       - name: Import Developer ID certificate
         if: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
         env:
@@ -53,6 +56,12 @@ jobs:
       - name: Package + notarize the app
         env:
           DEVELOPER_ID_APP: ${{ secrets.DEVELOPER_ID_APP }}
+          BUNDLE_ID: lifeline.fledgeling.app
+          # Preferred: an App Store Connect API key (the .p8 as a base64 secret + its ids).
+          MACOS_ASC_KEY_P8_BASE64: ${{ secrets.MACOS_ASC_KEY_P8_BASE64 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          # Fallback: an Apple ID app-specific password.
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
@@ -65,6 +74,12 @@ jobs:
             v[0-9]*) ;;
             *) echo "refusing to release from unexpected tag: $VERSION"; exit 1 ;;
           esac
+          # Materialise the App Store Connect API key from its base64 secret, if provided.
+          if [ -n "${MACOS_ASC_KEY_P8_BASE64:-}" ]; then
+            mkdir -p "$RUNNER_TEMP/asc"
+            echo "$MACOS_ASC_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/asc/AuthKey.p8"
+            export ASC_KEY_PATH="$RUNNER_TEMP/asc/AuthKey.p8"
+          fi
           bash scripts/package-app.sh "$VERSION" dist-app
           bash scripts/notarize.sh dist-app/lifeline.app "dist-app/lifeline-${VERSION}.zip"
           shasum -a 256 "dist-app/lifeline-${VERSION}.zip" > "dist-app/lifeline-${VERSION}.zip.sha256"
