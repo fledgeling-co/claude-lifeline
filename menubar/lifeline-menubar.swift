@@ -253,7 +253,9 @@ struct PopoverView: View {
             minWidth: 380,
             maxWidth: inWindow ? .infinity : 380,
             minHeight: inWindow ? 440 : nil,
-            maxHeight: inWindow ? .infinity : nil,
+            // Fill the forced popover contentSize when installed (see togglePopover); the
+            // setup screen sizes to its own content.
+            maxHeight: (inWindow || model.coreState == .installed) ? .infinity : nil,
             alignment: .topLeading
         )
         .font(.system(size: bodySize))
@@ -316,10 +318,9 @@ struct PopoverView: View {
                 }
                 .padding(.vertical, 6).padding(.horizontal, 8)
             }
-            // Size to content, capped so a long list scrolls internally. A forced MIN height
-            // makes a short list's popover oversized, and macOS then shifts an oversized popover
-            // up until its header clips behind the menu bar — so grow with content, don't pad.
-            .frame(maxHeight: inWindow ? .infinity : 900)
+            // Fill the available popover height (the popover's own contentSize sets how tall
+            // that is); a long list scrolls internally within it.
+            .frame(maxHeight: .infinity)
             .opacity(model.daemonQuiet ? 0.55 : 1)
         } else {
             VStack(spacing: 4) {
@@ -368,39 +369,49 @@ struct ProjectNav: View {
     private let onMint = Color(red: 0.02, green: 0.19, blue: 0.16)
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(model.activeProjects, id: \.self) { p in pill(p) }
-            }
-            .padding(.horizontal, 14)
+        // Chips distribute evenly across the track (each takes an equal share), so the bar
+        // reads as a segmented control with no trailing dead space.
+        HStack(spacing: 4) {
+            ForEach(model.activeProjects, id: \.self) { p in pill(p) }
         }
-        .padding(.top, 2).padding(.bottom, 10)
+        .padding(4)
+        // A recessed track (dark fill + hairline border) so the row reads as an
+        // intentional segmented control, not an empty bar — and clear top spacing
+        // to sit off the header divider above it.
+        .background(
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .fill(Color.black.opacity(0.22))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08)))
+        )
+        .padding(.horizontal, 12).padding(.top, 11).padding(.bottom, 10)
     }
 
     @ViewBuilder private func pill(_ label: String) -> some View {
         let selected = model.projectFilter == label
         Button {
-            // Toggle: tapping the selected chip clears the filter back to showing everything.
+            // Select this project. Selection is exclusive and there is no de-select — one
+            // project is always active while the bar is shown (see refresh's default).
             withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                model.projectFilter = selected ? nil : label
+                model.projectFilter = label
             }
         } label: {
             Text(label)
-                .font(.system(size: 12, weight: .medium)).lineLimit(1)
-                .padding(.horizontal, 12).padding(.vertical, 6)
+                .font(.system(size: 12, weight: .medium)).lineLimit(1).minimumScaleFactor(0.85)
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .frame(maxWidth: .infinity)
                 .foregroundStyle(selected ? onMint : .secondary)
                 .background {
                     if selected {
-                        RoundedRectangle(cornerRadius: 9).fill(Palette.mint)
+                        RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.mint)
                             .matchedGeometryEffect(id: "nav-ind", in: ns)
-                    } else {
-                        RoundedRectangle(cornerRadius: 9).fill(Color.primary.opacity(0.06))
                     }
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 9))
+                .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(selected ? "Showing only \(label), tap to show all projects" : "Show only \(label)")
+        .accessibilityLabel("Show only \(label)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
@@ -1012,8 +1023,15 @@ final class Model: ObservableObject {
             let (snap, _) = Lifeline.readSnapshot()
             snapshot = snap
             lastMtime = mtime
-            // If the filtered project no longer has active work, fall back to All.
-            if let f = projectFilter, !activeProjects.contains(f) { projectFilter = nil }
+            // Keep a project always selected while the bar is shown: default to the first
+            // active project, and if the selected one goes quiet, fall to the first still
+            // active. With one or zero active projects there's nothing to filter.
+            let active = activeProjects
+            if active.count > 1 {
+                if projectFilter == nil || !active.contains(projectFilter!) { projectFilter = active.first }
+            } else {
+                projectFilter = nil
+            }
         }
         // Stale age drives the quiet banner + icon tint. When hidden, only publish it across the
         // quiet threshold (so the icon flips once) rather than every second.
@@ -1130,6 +1148,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
             popover.performClose(sender)
         } else {
             model.refresh()
+            // Force a taller popover for the runs view (a fixed contentSize is the supported
+            // way — a SwiftUI min-height instead makes macOS clip the header). The setup
+            // screen keeps content sizing so it isn't a mostly-empty panel.
+            if let hosting = popover.contentViewController as? NSHostingController<PopoverView> {
+                if model.coreState == .installed {
+                    hosting.sizingOptions = []
+                    popover.contentSize = NSSize(width: 380, height: 640)
+                } else {
+                    hosting.sizingOptions = .preferredContentSize
+                }
+            }
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }

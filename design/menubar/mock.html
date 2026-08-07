@@ -142,10 +142,12 @@
   .healthbar { display: flex; height: 3px; border-radius: 1.5px; overflow: hidden; margin-top: 6px; }
   .healthbar .good { background: #00C8B3; transition: width 0.4s ease; }
   .healthbar .bad  { background: rgba(255,141,40,0.9); transition: width 0.4s ease; }
-  /* project switcher: a chip per project with active work (no explicit "All" chip) */
-  .pnav { display: flex; gap: 6px; overflow-x: auto; padding: 2px 14px 10px; }
-  .pnav-pill { flex: none; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 9px; white-space: nowrap; transition: background 0.2s ease, color 0.2s ease; }
-  .light .pnav-pill { color: rgba(0,0,0,0.5); background: rgba(0,0,0,0.06); } .dark .pnav-pill { color: rgba(255,255,255,0.55); background: rgba(255,255,255,0.06); }
+  /* project switcher: chips in a recessed track (dark well + hairline border); no "All" chip */
+  .pnav { display: flex; gap: 4px; padding: 4px; margin: 11px 12px 10px; border-radius: 13px; }
+  .light .pnav { background: rgba(0,0,0,0.05); border: 1px solid rgba(0,0,0,0.08); }
+  .dark .pnav { background: rgba(0,0,0,0.22); border: 1px solid rgba(255,255,255,0.08); }
+  .pnav-pill { flex: 1 1 0; min-width: 0; text-align: center; overflow: hidden; text-overflow: ellipsis; background: transparent; border: 0; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 9px; white-space: nowrap; transition: background 0.2s ease, color 0.2s ease; }
+  .light .pnav-pill { color: rgba(0,0,0,0.5); } .dark .pnav-pill { color: rgba(255,255,255,0.55); }
   .pnav-pill.on { background: #00C8B3; color: #06312A; font-weight: 600; }
   /* while installing, a continuous stripe travels the filled part so the bar reads as
      working even between the discrete steps. Stops (via .filled) when it completes. */
@@ -161,8 +163,8 @@
   @media (prefers-reduced-motion: reduce) { .healthbar.installing .good::before { animation: none; } }
   .divider { height: 1px; }
   .rundiv { height: 1px; margin: 0 14px; }
-  .runs { padding: 6px 8px; max-height: 468px; overflow-y: auto; }
-  .shell.window .runs { max-height: none; }
+  .runs { padding: 6px 8px; min-height: 440px; max-height: 520px; overflow-y: auto; }
+  .shell.window .runs { max-height: none; min-height: 0; }
   /* each run is its own quiet unit; the open one gets a faint card so the accordion reads */
   .run { padding: 0; border-radius: 12px; }
   .run + .run { margin-top: 2px; }
@@ -360,11 +362,11 @@ const FIXTURES = {
     online: true, quiet: false,
     summary: "2 workflows running · all healthy", healthy: 1,
     runs: [
-      { name: "diolog-swe-bench", wf: "perch-close-the-five", id: "wf_795d98f2", state: "running", chip: null, dot: "ok", expanded: false,
+      { name: "diolog", wf: "perch-close-the-five", id: "wf_795d98f2", state: "running", chip: null, dot: "ok", expanded: false,
         running: 4, pending: 2, dur: "9m", ctx: 0.34, term: "Ghostty", agents: [] },
-      { name: "diolog-web", wf: "finance-fleet-42", id: "wf_b7d92af6", state: "running", chip: null, dot: "ok", expanded: false,
+      { name: "perch", wf: "finance-fleet-42", id: "wf_b7d92af6", state: "running", chip: null, dot: "ok", expanded: false,
         running: 5, pending: 0, dur: "3m", ctx: 0.22, term: "Terminal", agents: [] },
-      { name: "perch-ir", wf: "perch-nightly-audit", id: "wf_1c07ab55", state: "completed", chip: "ok", dot: "ok", expanded: false,
+      { name: "perch", wf: "perch-nightly-audit", id: "wf_1c07ab55", state: "completed", chip: "ok", dot: "ok", expanded: false,
         done: 8, dur: "22m", ctx: 0.51, agents: [] },
     ],
   },
@@ -372,7 +374,7 @@ const FIXTURES = {
     online: true, quiet: false,
     summary: "5 workflows running · 1 needs a look", healthy: 0.83,
     runs: [
-      { name: "diolog-swe-bench", wf: "perch-fleet-run7", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: false,
+      { name: "anvil", wf: "devreview-remediate", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: false,
         running: 3, pending: 1, dur: "14m", ctx: 0.62, term: "Ghostty",
         note: "waiting on work PH-009 before merge",
         caller: ["Kicked off the perch fleet: 4 agents across the review dimensions", "Watching for the verify gate before I merge"],
@@ -402,15 +404,15 @@ const FIXTURES = {
             "lifeline: flagged as stalled, will nudge then relaunch",
           ]},
         ]},
-      { name: "diolog-web", wf: "finance-fleet-42", id: "wf_b7d92af6", state: "running", chip: null, dot: "ok", expanded: false,
+      { name: "anvil", wf: "finance-fleet-42", id: "wf_b7d92af6", state: "running", chip: null, dot: "ok", expanded: false,
         running: 5, pending: 2, dur: "7m", ctx: 0.38, term: "Terminal", note: "implement, 5 agents working", agents: [] },
-      { name: "perch-ir", wf: "perch-fleet-run7", id: "wf_3a1e9c02", state: "recovering", chip: "recover", dot: "recover", expanded: false,
+      { name: "perch", wf: "perch-fleet-run7", id: "wf_3a1e9c02", state: "recovering", chip: "recover", dot: "recover", expanded: false,
         running: 2, pending: 0, dur: "11m", ctx: 0.44, term: "Ghostty", agents: [] },
-      { name: "dossier-subdomains", wf: "dossier-deploy-sweep", id: "wf_9d5b7e10", state: "running", chip: null, dot: "ok", expanded: false,
+      { name: "dossier", wf: "dossier-deploy-sweep", id: "wf_9d5b7e10", state: "running", chip: null, dot: "ok", expanded: false,
         running: 3, pending: 4, dur: "2m", ctx: 0.19, agents: [] },
       { name: "armada", wf: "armada-sync-nightly", id: "wf_44c8fa93", state: "running", chip: null, dot: "ok", expanded: false,
         running: 1, pending: 0, dur: "40s", ctx: 0.12, agents: [] },
-      { name: "diolog-mobile", wf: "mobile-e2e-run3", id: "wf_7fe2b118", state: "completed", chip: "ok", dot: "ok", expanded: false,
+      { name: "anvil", wf: "mobile-e2e-run3", id: "wf_7fe2b118", state: "completed", chip: "ok", dot: "ok", expanded: false,
         done: 6, dur: "18m", ctx: 0.55, agents: [] },
     ],
   },
@@ -593,14 +595,19 @@ function render() {
     </div>`;
   } else {
     // project switcher: a chip per project with active (non-done) work; no explicit "All".
+    // A project is always selected while the bar shows — default to the first, and drop the
+    // filter when one or zero projects are active.
     const activeProjects = [...new Set(fx.runs
       .filter((r) => !(r.state === "completed" || r.state === "completed-with-failures"))
       .map((r) => r.name))].sort();
     if (activeProjects.length > 1) {
+      if (ui.projectFilter == null || !activeProjects.includes(ui.projectFilter)) ui.projectFilter = activeProjects[0];
       html += `<div class="pnav">` +
         activeProjects.map((p) =>
           `<button class="pnav-pill${ui.projectFilter === p ? " on" : ""}" data-proj="${p}">${p}</button>`)
           .join("") + `</div>`;
+    } else {
+      ui.projectFilter = null;
     }
     html += `<div class="runs">`;
     let firstShown = true;
@@ -669,11 +676,10 @@ function render() {
 
   content.innerHTML = html;
 
-  // project switcher: tap to filter to that project; tap the selected chip again to clear (show all)
+  // project switcher: select that project (exclusive; no de-select — one is always active)
   content.querySelectorAll(".pnav-pill[data-proj]").forEach((el) => {
     el.addEventListener("click", () => {
-      const p = el.dataset.proj;
-      ui.projectFilter = ui.projectFilter === p ? null : p;
+      ui.projectFilter = el.dataset.proj;
       render();
     });
   });
