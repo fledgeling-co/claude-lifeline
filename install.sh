@@ -164,13 +164,11 @@ fi
 
 # --- register the MCP server so the Claude Code model knows about lifeline ----------
 # Tool descriptions are how claude's own model learns it can retry/pause/resume runs.
-if "${CLAUDE_LINK}" mcp list 2>/dev/null | grep -q '^lifeline\b'; then
-  say "MCP server already registered"
-else
-  "${CLAUDE_LINK}" mcp add --scope user lifeline -- "${NODE_BIN}" "${SRC}/dist/mcp/index.js" \
-    >/dev/null 2>&1 && say "registered lifeline MCP server (user scope)" || \
-    warn "could not register the MCP server automatically; run: claude mcp add --scope user lifeline -- ${NODE_BIN} ${SRC}/dist/mcp/index.js"
-fi
+# Always remove-then-add so a moved checkout can never leave a stale registration behind.
+"${CLAUDE_LINK}" mcp remove --scope user lifeline >/dev/null 2>&1 || true
+"${CLAUDE_LINK}" mcp add --scope user lifeline -- "${NODE_BIN}" "${SRC}/dist/mcp/index.js" \
+  >/dev/null 2>&1 && say "registered lifeline MCP server (user scope)" || \
+  warn "could not register the MCP server automatically; run: claude mcp add --scope user lifeline -- ${NODE_BIN} ${SRC}/dist/mcp/index.js"
 
 # --- done --------------------------------------------------------------------------
 say "installed. Running a health check:"
