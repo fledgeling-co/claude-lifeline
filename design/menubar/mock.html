@@ -142,6 +142,18 @@
   .healthbar { display: flex; height: 3px; border-radius: 1.5px; overflow: hidden; margin-top: 6px; }
   .healthbar .good { background: #00C8B3; transition: width 0.4s ease; }
   .healthbar .bad  { background: rgba(255,141,40,0.9); transition: width 0.4s ease; }
+  /* while installing, a continuous stripe travels the filled part so the bar reads as
+     working even between the discrete steps. Stops (via .filled) when it completes. */
+  .healthbar.installing .good::before {
+    content: ""; position: absolute; inset: 0;
+    background: repeating-linear-gradient(115deg,
+      rgba(255,255,255,0.28) 0 10px, rgba(255,255,255,0) 10px 22px);
+    background-size: 44px 100%;
+    animation: barstripe 0.8s linear infinite;
+  }
+  .healthbar.installing .good.filled::before { animation: none; opacity: 0; }
+  @keyframes barstripe { to { background-position: 44px 0; } }
+  @media (prefers-reduced-motion: reduce) { .healthbar.installing .good::before { animation: none; } }
   .divider { height: 1px; }
   .rundiv { height: 1px; margin: 2px 16px; }
   .runs { padding: 4px 0; max-height: 340px; overflow-y: auto; }
@@ -152,6 +164,9 @@
   .dot { width: 8px; height: 8px; border-radius: 4px; flex: none; }
   .dot.ok { background: #34C759; } .dot.warn { background: #FF8D28; }
   .dot.err { background: #FF383C; } .dot.recover { background: #00C8B3; }
+  .dot.paused { background: #E0A33C; }
+  /* the stalled/paused dot is hollow: it's idle, not failed */
+  .dot.paused { background: transparent; box-shadow: inset 0 0 0 2px #E0A33C; }
   .run-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .run-id { font-size: 10px; }
   .chip { margin-left: auto; font-size: 10px; line-height: 13px; font-weight: 600; padding: 1.5px 7px; border-radius: 99px; flex: none; }
@@ -161,8 +176,57 @@
   .chip.recover { color: #067A6A; background: rgba(0,200,179,0.16); }
   .dark .chip.recover { color: #4CE0B3; }
   .agents { padding: 0 0 2px 26px; }
-  .agent { display: flex; align-items: center; gap: 8px; padding: 3px 8px; border-radius: 6px; min-height: 24px; transition: background 0.2s ease; }
-  .agent .state { margin-left: auto; font-size: 11px; }
+  .agent-block { border-radius: 8px; }
+  .light .agent-block.open { background: rgba(0,0,0,0.03); }
+  .dark .agent-block.open { background: rgba(255,255,255,0.035); }
+  .agent { display: flex; align-items: center; gap: 8px; padding: 3px 8px; border-radius: 6px; min-height: 26px; transition: background 0.15s ease; }
+  .agent .aname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .agent .astate { margin-left: auto; font-size: 11px; }
+
+  /* one calm activity line under a run (the narrator). tertiary, not mono, not a log. */
+  .noteline { padding: 0 8px 4px 34px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* the state word carries colour only for the states that need attention */
+  .t-err { color: #D9542F; } .dark .t-err { color: #FF9E7A; }
+  .t-warn { color: #B4791A; } .dark .t-warn { color: #F0B44C; }
+  .t-recover { color: #0A8F80; } .dark .t-recover { color: #4CE0B3; }
+
+  /* duration + context meter, right of the state, tabular, quiet */
+  .meta { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+  .dur { font-size: 11px; font-variant-numeric: tabular-nums; }
+  .light .dur { color: rgba(0,0,0,0.42); } .dark .dur { color: rgba(255,255,255,0.45); }
+  .ctx { position: relative; width: 26px; height: 5px; border-radius: 3px; overflow: hidden; flex: none; }
+  .light .ctx { background: rgba(0,0,0,0.1); } .dark .ctx { background: rgba(255,255,255,0.14); }
+  .ctx-fill { position: absolute; inset: 0; right: auto; background: #3E9C8E; border-radius: 3px; }
+  .ctx.warm .ctx-fill { background: #E0A33C; } .ctx.hot .ctx-fill { background: #E0603C; }
+
+  /* terminal reveal: hidden until the run row is hovered (no clutter at rest) */
+  .termbtn {
+    flex: none; width: 22px; height: 20px; border: none; background: transparent; color: inherit;
+    border-radius: 6px; opacity: 0; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+    transition: opacity 0.15s ease, background 0.15s ease;
+  }
+  .row:hover .termbtn { opacity: 0.6; }
+  .termbtn:hover { opacity: 1 !important; }
+  .light .termbtn:hover { background: rgba(0,0,0,0.08); } .dark .termbtn:hover { background: rgba(255,255,255,0.12); }
+
+  /* the expandable transcript panel (progressive disclosure; click the agent row) */
+  .tail-panel {
+    max-height: 0; overflow: hidden; margin: 0 8px 0 24px; border-radius: 8px;
+    transition: max-height 0.26s cubic-bezier(0.2,0.8,0.2,1), margin 0.26s ease;
+  }
+  .tail-panel.open { max-height: 150px; margin-top: 2px; margin-bottom: 6px; }
+  .tail-panel-inner {
+    padding: 8px 10px; font-size: 10.5px; line-height: 16px; white-space: pre-wrap; word-break: break-word;
+    max-height: 150px; overflow-y: auto;
+  }
+  .light .tail-panel-inner { background: rgba(0,0,0,0.05); color: rgba(0,0,0,0.6); }
+  .dark .tail-panel-inner { background: rgba(0,0,0,0.26); color: rgba(255,255,255,0.6); }
+  .logline { padding: 1px 0; }
+  .logline.logerr { color: #D9542F; } .dark .logline.logerr { color: #FF9E7A; }
+  .logline:last-child { font-weight: 500; }
+  .light .logline:last-child { color: rgba(0,0,0,0.82); } .dark .logline:last-child { color: rgba(255,255,255,0.9); }
+  @media (prefers-reduced-motion: reduce) { .tail-panel { transition: none; } }
   .btn { font-size: 11px; line-height: 24px; height: 24px; font-weight: 500; padding: 0 11px; border-radius: 12px; border: none; flex: none; color: inherit; transition: background 0.2s ease; font-family: inherit; }
   .btn.primary { background: #00C8B3; color: #06312A; font-weight: 600; }
   .btn.primary:hover { background: #00DAC3; }
@@ -260,13 +324,37 @@ const FIXTURES = {
     online: true, quiet: false,
     summary: "2 workflows tracked · 1 needs a look", healthy: 0.875,
     runs: [
-      { name: "perch", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: true, agents: [
-        { name: "merge PH-004", dot: "ok", state: "done" },
-        { name: "work PH-013", dot: "recover", state: "retrying (3/30, next in 12s)" },
-        { name: "work PH-009", dot: "err", state: "failed", retry: true },
-        { name: "work PH-011", dot: "ok", state: "running" },
-      ]},
-      { name: "finance", id: "wf_b7d92af6", state: "running", chip: "ok", dot: "ok", expanded: false, agents: [] },
+      { name: "perch", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: true,
+        dur: "14m", ctx: 0.62, term: "Ghostty",
+        note: "waiting on work PH-009 before merge",
+        agents: [
+          { name: "merge PH-004", dot: "ok", state: "done", dur: "3m 20s", ctx: 0.41, tail: [
+            "Rebased ai/ph-004 onto staging (2 files)",
+            "Gate: typecheck passed, lint passed, e2e passed",
+            "Merged PH-004 into staging at c4442c8",
+          ]},
+          { name: "work PH-013", dot: "recover", state: "retrying 3/30", dur: "6m 02s", ctx: 0.58, tail: [
+            "Editing src/daemon/ledger.ts (hunk 3/5)",
+            "Running vitest test/unit/ledger.test.ts",
+            "API Error: 529 Overloaded. lifeline retrying in 12s (attempt 3/30)",
+          ]},
+          { name: "work PH-009", dot: "err", state: "failed", retry: true, dur: "8m 47s", ctx: 0.73, tail: [
+            "Reading src/gateway/server.ts",
+            "Drafting the SSE retry decision",
+            "API Error: Unable to connect to API (ConnectionRefused)",
+          ]},
+          { name: "work PH-011", dot: "ok", state: "running", dur: "5m 11s", ctx: 0.49, tail: [
+            "Wiring src/cli/index.ts subcommands",
+            "Added the lifeline queue add handler",
+          ]},
+          { name: "work PH-015", dot: "paused", state: "stalled 11m", dur: "19m 30s", ctx: 0.9, tail: [
+            "Editing src/reframe/pipeline.ts",
+            "No output or context change for 11 minutes",
+            "lifeline: flagged as stalled, will nudge then relaunch",
+          ]},
+        ]},
+      { name: "finance", id: "wf_b7d92af6", state: "running", chip: "ok", dot: "ok", expanded: false,
+        dur: "7m", ctx: 0.38, term: "Terminal", note: "implement, 5 agents working", agents: [] },
     ],
   },
   empty: { online: true, quiet: false, summary: null, healthy: 1, runs: [] },
@@ -283,11 +371,46 @@ const FIXTURES = {
 
 const PULSE = 'M2 18 L14 18 L17 20 L20 18 L23 18 L27 6 L31 22 L34 13 L42 13';
 const FLAT  = 'M2 18 L42 18';
+const TERM_ICON = `<svg viewBox="0 0 16 16" width="12" height="12" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 6.5 L6.5 8 L4.5 9.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 9.7 H11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>`;
+
+/* duration + a compact context-window meter, right-aligned, tabular, dim: the two live
+   numbers that matter per row without adding a line. The meter warms toward amber as the
+   context fills (a full context is the quiet reason an agent is about to derail). */
+function meta(dur, ctx) {
+  if (dur == null && ctx == null) return "";
+  let out = `<span class="meta">`;
+  if (dur != null) out += `<span class="dur">${dur}</span>`;
+  if (ctx != null) {
+    const pct = Math.round(ctx * 100);
+    const warm = ctx >= 0.85 ? "hot" : ctx >= 0.7 ? "warm" : "";
+    out += `<span class="ctx ${warm}" title="Context window ${pct}% full"><span class="ctx-fill" style="width:${pct}%"></span></span>`;
+  }
+  return out + `</span>`;
+}
+
+/* per-agent state word tone: only failure and stall carry colour; the rest stay quiet
+   (the dot already encodes health, so the word needn't shout too). */
+function stateTone(state) {
+  if (/^failed/.test(state)) return "t-err";
+  if (/^stalled/.test(state)) return "t-warn";
+  if (/^retrying/.test(state)) return "t-recover";
+  return "sec";
+}
+
+/* a recessed, monospaced log panel showing the last few transcript lines. Newest at the
+   bottom (reading order for a log). Collapsed by default; height animates open. */
+function tailPanel(lines, open, panelId) {
+  const rows = lines.map((l) => {
+    const e = /API Error|ConnectionRefused|Overloaded|stalled/i.test(l);
+    return `<div class="logline ${e ? "logerr" : ""}">${l}</div>`;
+  }).join("");
+  return `<div class="tail-panel${open ? " open" : ""}" id="${panelId}"><div class="tail-panel-inner mono">${rows}</div></div>`;
+}
 
 const $ = (id) => document.getElementById(id);
 const shell = $("shell"), arrow = $("arrow"), content = $("content"), statusitem = $("statusitem");
 
-let ui = { state: "warning", appearance: "dark", open: false, mode: "popover", winPos: null };
+let ui = { state: "warning", appearance: "dark", open: false, mode: "popover", winPos: null, learnOpen: false };
 
 /* ---------- render ---------- */
 function pulseSvg(cls, stroke, opacity, flat) {
@@ -312,41 +435,51 @@ function render() {
         <span class="pill offline">not set up</span>
       </div></div>
       <div class="divider"></div>
-      <div style="padding: 20px 20px 6px; position: relative;">
-        <svg id="hero-stage" viewBox="0 0 320 96" style="width:100%; height:96px; display:block;">
-          <g id="hero-drops"></g>
-          <path id="hero-line" d="M10 62 L310 62" stroke="${fx.installing ? "#00C8B3" : "#5A6470"}" stroke-width="3.5" stroke-linecap="round" fill="none"/>
-          <circle id="hero-node" r="5" fill="#EAFFF6" opacity="0"/>
-        </svg>
-        ${fx.installing ? `
-          <div style="margin-top:10px;">
-            <div style="font-weight:600;" id="install-title">Setting up protection…</div>
-            <p class="sec" id="install-step" style="margin-top:3px;">Starting the connection helper…</p>
-            <div class="healthbar" style="margin-top:10px;"><span class="good" id="install-progress" style="width:8%"></span></div>
-            <p class="sec" style="margin-top:10px; font-size:11px;">Your command stays <span class="mono">claude</span>. Anthropic's app is never modified.</p>
+      ${fx.installing ? `
+        <div style="padding: 22px 20px 8px;">
+          <svg id="hero-stage" viewBox="0 0 320 60" style="width:100%; height:44px; display:block; margin-bottom:14px;">
+            <path id="hero-line" d="M10 34 L310 34" stroke="#00C8B3" stroke-width="3" stroke-linecap="round" fill="none"/>
+            <circle id="hero-node" r="4" fill="#EAFFF6" opacity="0"/>
+          </svg>
+          <div style="font-weight:600;" id="install-title">Setting up…</div>
+          <p class="sec" id="install-step" style="margin-top:3px;">Starting the connection helper</p>
+          <div class="healthbar installing" style="margin-top:10px;"><span class="good" id="install-progress" style="width:8%"></span></div>
+        </div>
+      ` : `
+        <div style="padding: 16px 20px 8px;">
+          <svg id="hero-stage" viewBox="0 0 320 68" style="width:100%; height:52px; display:block;">
+            <g id="hero-drops"></g>
+            <path id="hero-line" d="M10 40 L310 40" stroke="#5A6470" stroke-width="3" stroke-linecap="round" fill="none"/>
+          </svg>
+          <div style="font-weight:600; font-size:14px; margin-top:10px;">lifeline isn't set up yet</div>
+          <p class="sec" style="margin-top:6px; line-height:17px;">It sits next to Claude Code and brings back the workflow agents it quietly drops. Setting it up adds three background helpers that:</p>
+          <div style="display:flex; flex-direction:column; gap:8px; margin-top:12px;">
+            <div class="agent" style="padding-left:0;"><span class="dot recover"></span><span>retry rate limits, overloads and dropped connections</span></div>
+            <div class="agent" style="padding-left:0;"><span class="dot recover"></span><span>bring back agents that fall over or stall, and wait out usage caps</span></div>
+            <div class="agent" style="padding-left:0;"><span class="dot recover"></span><span>re-check compatibility whenever Claude Code updates</span></div>
           </div>
-        ` : `
-          <div style="display:flex; align-items:baseline; gap:8px; margin-top:6px;">
-            <span id="hero-stat" style="font-size:34px; line-height:36px; font-weight:700; letter-spacing:-0.5px; color:#FF8D28;">61%</span>
-            <span class="sec" style="font-size:12px;">of big workflow runs silently lose agents.<br>Yours don't have to.</span>
+          <div class="tail-panel${ui.learnOpen ? " open" : ""}" id="learn-panel" style="margin:8px 0 0;">
+            <div class="tail-panel-inner" style="font-family:inherit; font-size:11px; line-height:16px;">
+              <div>Adds three background helpers (a gateway, a watcher, a version check).</div>
+              <div>Points your <span class="mono">claude</span> command through the gateway; <span class="mono">claude</span> stays the command.</div>
+              <div>Never modifies Anthropic's app.</div>
+              <div>Reversible: one command removes everything.</div>
+            </div>
           </div>
-          <div style="display:flex; flex-direction:column; gap:7px; margin-top:14px;" id="benefit-list">
-            <div class="agent" style="padding-left:0;"><span class="dot recover"></span><span>Catches agents the moment they fall over</span></div>
-            <div class="agent" style="padding-left:0;"><span class="dot recover"></span><span>Retries rate limits and network blips, up to 30×</span></div>
-            <div class="agent" style="padding-left:0;"><span class="dot recover"></span><span>Waits out usage caps, resumes the second they free</span></div>
+          <div style="display:flex; gap:8px; margin-top:14px; align-items:center;">
+            <button class="btn primary" id="install-btn" style="height:28px; line-height:28px; border-radius:14px; padding:0 16px; font-size:12px;">Set up lifeline</button>
+            <button class="btn" id="learn-btn" style="height:28px; line-height:28px; border-radius:14px;">${ui.learnOpen ? "Hide details" : "What it changes"}</button>
           </div>
-          <div style="display:flex; gap:8px; margin-top:16px; align-items:center;">
-            <button class="btn primary" id="install-btn" style="height:28px; line-height:28px; border-radius:14px; padding:0 16px; font-size:12px;">Install protection</button>
-            <button class="btn" id="learn-btn" style="height:28px; line-height:28px; border-radius:14px;">What it changes</button>
-          </div>
-        `}
-      </div>
-      <div style="height:10px"></div>
+        </div>
+      `}
+      <div style="height:8px"></div>
       <div class="divider"></div>
-      <div class="footer sec"><span>${fx.installing ? "About a minute · everything reversible" : "Nothing is installed until you choose"}</span><span class="quit">Quit lifeline</span></div>`;
+      <div class="footer sec"><span>${fx.installing ? "About a minute, and reversible any time." : "Nothing happens until you say so."}</span><span class="quit">Quit lifeline</span></div>`;
 
     const installBtn = document.getElementById("install-btn");
     if (installBtn) installBtn.addEventListener("click", () => { setState("installing"); runFakeInstall(); });
+    const learnBtn = document.getElementById("learn-btn");
+    if (learnBtn) learnBtn.addEventListener("click", () => { ui.learnOpen = !ui.learnOpen; render(); });
     const path = $("statuspath");
     path.setAttribute("d", FLAT);
     path.setAttribute("stroke", "rgba(255,255,255,0.45)");
@@ -369,14 +502,14 @@ function render() {
   html += `</div><div class="divider"></div>`;
 
   if (fx.quiet) {
-    html += `<div class="stale sec"><b>The watcher has gone quiet.</b> Its last update was 4 minutes ago, so what's below may be stale. Run <span class="mono">lifeline doctor</span> in a terminal to check on it.</div>`;
+    html += `<div class="stale sec"><b>The watcher's gone quiet;</b> last update 4m ago, so what's below might be stale. Run <span class="mono">lifeline doctor</span> in a terminal to check on it.</div>`;
   }
 
   if (fx.runs.length === 0) {
     html += `<div class="empty">
       ${pulseSvg("pulse-big", "#00C8B3", 0.45, false)}
-      <div>No workflows tracked yet</div>
-      <p class="sec">Start a workflow in Claude Code and it will appear here, watched.</p>
+      <div>Nothing running right now</div>
+      <p class="sec">Start a workflow in Claude Code and it shows up here, watched.</p>
     </div>`;
   } else {
     html += `<div class="runs">`;
@@ -386,16 +519,33 @@ function render() {
         <span class="chev sec">${run.expanded ? "▾" : "▸"}</span>
         <span class="dot ${run.dot}"></span>
         <span class="run-name">${run.name}</span>
-        <span class="run-id ter mono">${run.id}</span>
         <span class="chip ${run.chip}">${run.state}</span>
+        ${run.term ? `<button class="termbtn" data-term="${i}" title="Open the ${run.term} tab running this workflow">${TERM_ICON}</button>` : ""}
+        ${meta(run.dur, run.ctx)}
       </div>`;
+      // one calm activity line under the run: what the whole run is doing now.
+      if (run.note) {
+        html += `<div class="noteline ter">${run.note}</div>`;
+      }
       if (run.expanded && run.agents.length) {
         html += `<div class="agents">`;
-        for (const a of run.agents) {
-          html += `<div class="agent"><span class="dot ${a.dot}"></span><span>${a.name}</span>
-            <span class="state sec">${a.state}</span>${a.retry ? `<button class="btn primary">Retry</button>` : ""}</div>`;
-        }
-        html += `</div><div class="runactions"><button class="btn">Retry all failed</button><button class="btn">Pause run</button></div>`;
+        run.agents.forEach((a, j) => {
+          const open = !!a.tailOpen;
+          html += `<div class="agent-block${open ? " open" : ""}">
+            <div class="agent" data-agent="${i}-${j}" title="Show recent output">
+              <span class="dot ${a.dot}"></span><span class="aname">${a.name}</span>
+              <span class="astate ${stateTone(a.state)}">${a.state}</span>
+              ${meta(a.dur, a.ctx)}
+              ${a.retry ? `<button class="btn primary" data-noexpand>Retry</button>` : ""}
+            </div>`;
+          if (a.tail && a.tail.length) {
+            html += tailPanel(a.tail, open, `agenttail-panel-${i}-${j}`);
+          }
+          html += `</div>`;
+        });
+        html += `</div><div class="runactions">
+          <button class="btn">Retry failed agents</button>
+          <button class="btn">Pause run</button></div>`;
       }
       html += `</div>`;
     });
@@ -408,12 +558,29 @@ function render() {
 
   content.innerHTML = html;
 
-  // expand/collapse
+  // expand/collapse a run
   content.querySelectorAll(".row[data-run]").forEach((row) => {
     row.addEventListener("click", () => {
       const run = FIXTURES[ui.state].runs[Number(row.dataset.run)];
       run.expanded = !run.expanded;
       render();
+    });
+  });
+  // click an agent row -> reveal its recent output (progressive disclosure)
+  content.querySelectorAll(".agent[data-agent]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-noexpand]")) return; // Retry etc. don't toggle the log
+      e.stopPropagation();
+      const [ri, ai] = el.dataset.agent.split("-").map(Number);
+      const a = FIXTURES[ui.state].runs[ri].agents[ai];
+      a.tailOpen = !a.tailOpen; render();
+    });
+  });
+  // terminal reveal (mock: just flashes; the real app raises the Ghostty/Terminal tab)
+  content.querySelectorAll(".termbtn[data-term]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      el.animate([{ transform: "scale(1)" }, { transform: "scale(0.82)" }, { transform: "scale(1)" }], { duration: 220 });
     });
   });
 
@@ -521,20 +688,22 @@ let installTimer = null;
 function runFakeInstall() {
   // The consent -> progress -> protected sequence the real app performs, narrated.
   const steps = [
-    [12, "Starting the connection helper…"],
-    [38, "Starting the workflow watcher…"],
-    [62, "Routing claude through the helper (claude stays your command)…"],
-    [84, "Recording a compatibility fingerprint of your Claude Code…"],
-    [100, "Done — lifeline is watching."],
+    [22, "Starting the connection helper"],
+    [46, "Starting the workflow watcher"],
+    [70, "Routing claude through the helper (claude stays your command)"],
+    [92, "Recording a compatibility fingerprint of your Claude Code"],
+    [100, "Set up. lifeline's watching."],
   ];
   let i = 0;
   clearInterval(installTimer);
   installTimer = setInterval(() => {
     const bar = document.getElementById("install-progress");
     const step = document.getElementById("install-step");
+    const title = document.getElementById("install-title");
     if (!bar || i >= steps.length) { clearInterval(installTimer); if (i >= steps.length) setState("healthy"); return; }
     bar.style.width = steps[i][0] + "%";
     step.textContent = steps[i][1];
+    if (i === steps.length - 1) { if (title) title.textContent = "Done"; bar.classList.add("filled"); }
     i += 1;
   }, 900);
 }

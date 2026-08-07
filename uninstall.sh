@@ -65,6 +65,7 @@ if [[ -x "${CLAUDE_LINK}" ]]; then
 fi
 
 rm -f "${LIFELINE_HOME}/bin/lifeline-menubar"
+[[ -L "${LOCAL_BIN}/lifeline" ]] && rm -f "${LOCAL_BIN}/lifeline"
 
 say "lifeline removed. Your command is still 'claude'."
 say "State under ${LIFELINE_HOME} is left in place; delete it with:  rm -rf ${LIFELINE_HOME}"

@@ -131,6 +131,15 @@ fi
 ln -s "${LIFELINE_HOME}/claude-wrapper.sh" "${CLAUDE_LINK}"
 say "repointed ${CLAUDE_LINK} -> lifeline wrapper (claude stays your command)"
 
+# Put `lifeline` on PATH so `lifeline status` / `lifeline doctor` are real commands.
+# dist/cli/index.js carries a node shebang, so a direct symlink runs it.
+chmod +x "${SRC}/dist/cli/index.js" 2>/dev/null || true
+ln -sf "${SRC}/dist/cli/index.js" "${LOCAL_BIN}/lifeline"
+if ! command -v lifeline >/dev/null 2>&1; then
+  warn "installed the 'lifeline' command to ${LOCAL_BIN}, which is not on your PATH."
+  warn "add it with:  echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
+fi
+
 # --- render + load launchd agents --------------------------------------------------
 render() { sed \
   -e "s|@@NODE@@|${NODE_BIN}|g" \
