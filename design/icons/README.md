@@ -1,5 +1,11 @@
 # lifeline — app icon concepts
 
+<img src="concept-1-recovery-pulse-masked.png" alt="Recovery Pulse, the chosen lifeline icon" width="160" align="right">
+
+**Chosen: Concept 1, Recovery Pulse** (the layered SVG master `concept-1-recovery-pulse.svg`).
+Browse every concept and engine take in [`index.html`](index.html).
+
+
 Five committed concepts, each delivered through the mac-design-studio three-engine pipeline:
 
 - **Engine A** — hand-authored layered SVG (`concept-*.svg`), one named `<g>` per layer

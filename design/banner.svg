@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- lifeline README banner · derived from the Recovery Pulse icon master.
+     2:1 of the icon's design language stretched wide: charcoal cushion, the
+     flatline-dip-recovery pulse, emissive mint, node at the peak, wordmark. -->
+<svg width="2560" height="640" viewBox="0 0 1280 320" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="ground" cx="50%" cy="30%" r="90%">
+      <stop offset="0%" stop-color="#1B2530"/>
+      <stop offset="55%" stop-color="#121A24"/>
+      <stop offset="100%" stop-color="#0B1017"/>
+    </radialGradient>
+    <linearGradient id="pulse" x1="70" y1="0" x2="760" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1E9C86"/>
+      <stop offset="55%" stop-color="#19E39A"/>
+      <stop offset="100%" stop-color="#5BF2C6"/>
+    </linearGradient>
+    <radialGradient id="bloom" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#19E39A" stop-opacity="0.42"/>
+      <stop offset="100%" stop-color="#19E39A" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="6"/>
+    </filter>
+  </defs>
+
+  <!-- ground with rim + vignette -->
+  <rect width="1280" height="320" fill="url(#ground)"/>
+  <rect x="2" y="2" width="1276" height="316" rx="18" fill="none" stroke="#2B3947" stroke-opacity="0.55" stroke-width="2"/>
+
+  <!-- halo behind the beat -->
+  <ellipse cx="470" cy="150" rx="260" ry="170" fill="url(#bloom)"/>
+
+  <!-- the pulse: flatline, dip, recovery beat, settled line continuing right -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M70 172 L250 172 L296 196 L340 172 L382 172 L430 78 L474 218 L510 130 L560 130 L740 130"
+          stroke="#19E39A" stroke-opacity="0.45" stroke-width="26" filter="url(#soft)"/>
+    <path d="M70 172 L250 172 L296 196 L340 172 L382 172 L430 78 L474 218 L510 130 L560 130 L740 130"
+          stroke="url(#pulse)" stroke-width="13"/>
+    <circle cx="430" cy="78" r="11" fill="#EAFFF6"/>
+  </g>
+
+  <!-- wordmark + line -->
+  <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+    <text x="820" y="158" font-size="64" font-weight="700" letter-spacing="-1.5" fill="#F2F3F5">lifeline</text>
+    <text x="822" y="196" font-size="19" fill="#8A93A0">Claude Code workflows, brought back.</text>
+  </g>
+</svg>
