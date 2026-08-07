@@ -342,7 +342,7 @@ struct PopoverView: View {
             Text("Updated \(model.updatedAgo)").foregroundStyle(.secondary)
             Spacer()
             Menu {
-                Button("Uninstall lifeline…") { model.requestUninstall() }
+                Button("Uninstall Claude Code workflow patch…") { model.requestUninstall() }
             } label: {
                 Image(systemName: "ellipsis.circle").font(.system(size: 12))
             }
@@ -357,46 +357,50 @@ struct PopoverView: View {
     }
 }
 
-/// Top nav: a pill per project with active work, plus "All". Tapping filters the run list to
-/// that project; a mint indicator slides between pills. The set of pills is driven by
+/// Top nav: one chip per project with active work. Tapping filters the run list to that
+/// project; tapping the selected chip again clears the filter and shows everything (there is
+/// no explicit "All" chip). A mint indicator slides between chips. The set is driven by
 /// `model.activeProjects`, so it appears, grows and shrinks as projects gain and lose work.
 struct ProjectNav: View {
     @ObservedObject var model: Model
     @Namespace private var ns
-    // Selected-pill text: dark teal on mint (matches the app's primary buttons), clear contrast.
+    // Selected-chip text: dark teal on mint (matches the app's primary buttons), clear contrast.
     private let onMint = Color(red: 0.02, green: 0.19, blue: 0.16)
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 3) {
-                pill("All", key: nil)
-                ForEach(model.activeProjects, id: \.self) { p in pill(p, key: p) }
+            HStack(spacing: 6) {
+                ForEach(model.activeProjects, id: \.self) { p in pill(p) }
             }
-            .padding(4)
+            .padding(.horizontal, 14)
         }
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.06)))
-        .padding(.horizontal, 12).padding(.bottom, 8)
+        .padding(.top, 2).padding(.bottom, 10)
     }
 
-    @ViewBuilder private func pill(_ label: String, key: String?) -> some View {
-        let selected = model.projectFilter == key
+    @ViewBuilder private func pill(_ label: String) -> some View {
+        let selected = model.projectFilter == label
         Button {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { model.projectFilter = key }
+            // Toggle: tapping the selected chip clears the filter back to showing everything.
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
+                model.projectFilter = selected ? nil : label
+            }
         } label: {
             Text(label)
                 .font(.system(size: 12, weight: .medium)).lineLimit(1)
-                .padding(.horizontal, 11).padding(.vertical, 5)
+                .padding(.horizontal, 12).padding(.vertical, 6)
                 .foregroundStyle(selected ? onMint : .secondary)
                 .background {
                     if selected {
                         RoundedRectangle(cornerRadius: 9).fill(Palette.mint)
                             .matchedGeometryEffect(id: "nav-ind", in: ns)
+                    } else {
+                        RoundedRectangle(cornerRadius: 9).fill(Color.primary.opacity(0.06))
                     }
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(key == nil ? "All projects" : "Show only \(label)")
+        .accessibilityLabel(selected ? "Showing only \(label), tap to show all projects" : "Show only \(label)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
@@ -887,7 +891,7 @@ final class Model: ObservableObject {
     /// patch in place, so removing lifeline has to be its own explicit action.
     func requestUninstall() {
         let alert = NSAlert()
-        alert.messageText = "Uninstall lifeline?"
+        alert.messageText = "Uninstall the Claude Code workflow patch?"
         alert.informativeText = "This reverts the change to your claude launcher and stops lifeline's background helpers. Your command stays claude. Restart any running claude sessions afterwards.\n\nJust quitting lifeline leaves the patch in place; this is the way to fully remove it."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Uninstall")

@@ -142,11 +142,10 @@
   .healthbar { display: flex; height: 3px; border-radius: 1.5px; overflow: hidden; margin-top: 6px; }
   .healthbar .good { background: #00C8B3; transition: width 0.4s ease; }
   .healthbar .bad  { background: rgba(255,141,40,0.9); transition: width 0.4s ease; }
-  /* project switcher: a pill per project with active work, "All" plus the projects */
-  .pnav { display: flex; gap: 3px; overflow-x: auto; padding: 4px; margin: 8px 12px; border-radius: 12px; }
-  .light .pnav { background: rgba(0,0,0,0.05); } .dark .pnav { background: rgba(255,255,255,0.06); }
-  .pnav-pill { flex: none; font-size: 12px; font-weight: 500; padding: 5px 11px; border-radius: 9px; white-space: nowrap; transition: background 0.2s ease, color 0.2s ease; }
-  .light .pnav-pill { color: rgba(0,0,0,0.5); } .dark .pnav-pill { color: rgba(255,255,255,0.55); }
+  /* project switcher: a chip per project with active work (no explicit "All" chip) */
+  .pnav { display: flex; gap: 6px; overflow-x: auto; padding: 2px 14px 10px; }
+  .pnav-pill { flex: none; font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 9px; white-space: nowrap; transition: background 0.2s ease, color 0.2s ease; }
+  .light .pnav-pill { color: rgba(0,0,0,0.5); background: rgba(0,0,0,0.06); } .dark .pnav-pill { color: rgba(255,255,255,0.55); background: rgba(255,255,255,0.06); }
   .pnav-pill.on { background: #00C8B3; color: #06312A; font-weight: 600; }
   /* while installing, a continuous stripe travels the filled part so the bar reads as
      working even between the discrete steps. Stops (via .filled) when it completes. */
@@ -593,15 +592,14 @@ function render() {
       <p class="sec">Start a workflow in Claude Code and it shows up here, watched.</p>
     </div>`;
   } else {
-    // project switcher: a pill per project with active (non-done) work, plus "All".
+    // project switcher: a chip per project with active (non-done) work; no explicit "All".
     const activeProjects = [...new Set(fx.runs
       .filter((r) => !(r.state === "completed" || r.state === "completed-with-failures"))
       .map((r) => r.name))].sort();
     if (activeProjects.length > 1) {
       html += `<div class="pnav">` +
-        [`<button class="pnav-pill${ui.projectFilter == null ? " on" : ""}" data-proj="">All</button>`]
-          .concat(activeProjects.map((p) =>
-            `<button class="pnav-pill${ui.projectFilter === p ? " on" : ""}" data-proj="${p}">${p}</button>`))
+        activeProjects.map((p) =>
+          `<button class="pnav-pill${ui.projectFilter === p ? " on" : ""}" data-proj="${p}">${p}</button>`)
           .join("") + `</div>`;
     }
     html += `<div class="runs">`;
@@ -671,10 +669,11 @@ function render() {
 
   content.innerHTML = html;
 
-  // project switcher: filter the run list to the chosen project (empty = All)
+  // project switcher: tap to filter to that project; tap the selected chip again to clear (show all)
   content.querySelectorAll(".pnav-pill[data-proj]").forEach((el) => {
     el.addEventListener("click", () => {
-      ui.projectFilter = el.dataset.proj || null;
+      const p = el.dataset.proj;
+      ui.projectFilter = ui.projectFilter === p ? null : p;
       render();
     });
   });
