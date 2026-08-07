@@ -21,6 +21,9 @@
   "files": [
     "dist",
     "install",
+    "install.sh",
+    "uninstall.sh",
+    "bin",
     "README.md",
     "LICENSE"
   ],

@@ -1,93 +1,89 @@
 # lifeline
 
-**A resilience layer for Claude Code's Workflow feature. It stops your multi-agent runs from quietly losing work.**
-
-Set-and-forget, one command, macOS. It never touches Anthropic's signed binary.
+**Keeps your Claude Code workflows from quietly losing work.** It runs alongside Claude Code, catches the AI agents that would otherwise vanish mid-job, and brings them back.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lprhodes/lifeline/main/install.sh | bash
 ```
 
-Your command is still `claude`. It just stops losing your work.
+macOS, one command. After that your command is still `claude`. There's nothing to remember.
 
 ## Why this exists
 
-I ran the numbers over every dynamic-workflow run on my machine. 1,054 of them. 646 (61%) silently lost at least one agent, and 1,816 of 4,630 agents (39%) died along the way.
+If you run big jobs in Claude Code, the kind where it fans out a whole team of AI agents to work in parallel, you've probably trusted the word "completed" at the end. I did too, until I kept noticing the finished work had holes in it. Files that should have been touched weren't. Steps that were meant to happen hadn't.
 
-Here's the part that got me: you'd never know. When a workflow agent hits an API error, the runtime treats it as terminal. It returns `null`, zero retries. The `parallel()` / `pipeline()` `.filter(Boolean)` quietly drops the dead one, and the whole run reports **`completed`**. So "the workflow finished" and "the work actually got done" turn out to be unrelated claims.
+So I counted. Across 1,054 of my own workflow runs, 646 of them, 61%, had quietly lost at least one agent along the way. Out of 4,630 agents, 1,816 had died. That's 39% of the workforce, gone, on jobs the app still reported as done.
 
-The things doing the killing, in order:
+Here's what was happening. When one of those agents hits a snag, a rate limit, the network dropping for a second, running into a usage cap, Claude Code doesn't wait and try again. It drops that agent on the spot, quietly takes it out of the count, and calls the whole run finished. Nothing tells you. So "the workflow finished" and "the work actually got done" turned out to be two completely different claims.
 
-- **session / usage limits: 1,168 deaths.** These don't heal on their own; they reset at a fixed time.
-- **rate limits (429): 271.** Retryable, and nobody was retrying.
-- **ConnectionRefused: 197.** Usually a local proxy or gateway blinking, not the model.
-- **5xx / overload.** Server-side, temporary, retryable.
-- **"all accounts exhausted"** from multi-account proxies.
+lifeline is the fix. It sits next to Claude Code and catches those agents before they disappear, then gets them back on their feet.
 
-Backoff-free, retry-free, silent. That's the gap lifeline fills.
+## What it adds
 
-## What it does
+lifeline doesn't replace Claude Code's workflows. It's the same feature you already use, with the failures handled.
 
-- **Auto-retry for every retryable failure.** Exponential backoff with full jitter, up to 30 attempts, and the retry state survives a process restart. Rate limits, 5xx, and connectivity errors heal on their own.
-- **It knows what's worth retrying.** 429/529 honour `Retry-After`; 5xx back off with jitter; ConnectionRefused becomes a connectivity signal rather than a wasted attempt; "prompt too long" is terminal and never blind-retried (throwing it at the wall 30 times helps nobody).
-- **Retry and Resume are the same button.** Press it on a failed agent or workflow and the red cross clears. Auto-retry presses it for you. Pressing it again when there's nothing to do is safe.
-- **Usage-limit recovery that understands multiple accounts.** When you hit a limit, the agent parks in a paused state and retries on a schedule, picking up whichever proxy account frees up first. It does not hard-sleep to a single reset time, because if you're running several accounts they reset at different times.
-- **A failed agent while its siblings are still working shows as a warning, not an error.** The run only goes red when the whole thing actually fails. One dropped agent out of twelve shouldn't look like a house fire.
-- **Pause a single agent, or a whole workflow** (which pauses all its subagents). Manually, or automatically.
-- **Connectivity-aware auto-pause.** Network drops, the run pauses instead of burning through retries. Network comes back, agents resume on jittered timing so they don't all stampede the API at once.
-- **Live queue changes.** Enqueue new work or drop pending items in a mailbox a running drain workflow feeds from, so new work joins without tearing the whole workflow down and rebuilding it.
-- **Templating.** Save a workflow script as a reusable, parameterised template (the args become a schema with defaults), and mine your past runs for the workflows you keep rebuilding.
-- **The CLI's own model knows about all of this.** The new capabilities are exposed through the tool descriptions, so Claude knows it can pause a run, resume it, add work, and reach for a template.
-- **A version check that fails closed.** lifeline fingerprints the CLI's stable contracts. When Claude Code auto-updates, a background watcher re-checks compatibility and tells you if a new patch is needed. It won't mis-apply against a version it doesn't recognise; it says so and stays out of the way.
+**It retries the stumbles for you.** When an agent hits a temporary problem, a rate limit, an overloaded server, the internet blipping, lifeline waits a sensible amount of time and tries again, waiting a bit longer each go, up to 30 times, instead of giving up on the first trip. It also knows which problems are worth retrying and which aren't; a request that's genuinely too big to ever fit, for instance, doesn't get thrown at the wall 30 times for nothing.
 
-## How it works (and what it doesn't touch)
+**It waits out usage caps properly.** Hit a usage or session limit and lifeline parks that agent and keeps an eye out, picking it back up the moment there's room again. If you run several accounts through a proxy and get "all accounts busy", same thing. It doesn't just sleep until one fixed reset time, because when you've got a few accounts they free up at different moments, and lifeline takes the first one that does.
 
-The installed Claude Code CLI is now a Bun-compiled, code-signed binary with its logic in bytecode. You can't safely patch that in place, and even if you could, it'd break on the next update. So lifeline doesn't try.
+**Retry and resume are the same button.** Press retry on a failed agent, or on the whole workflow, and it just picks up where it left off. It's safe to press when there's nothing to fix, and the automatic retries are pressing it for you anyway. The red cross clears itself.
 
-It works at three stable seams instead:
+**A stumble is a warning, not an alarm.** If one agent trips while the rest of the team is still working, the workflow shows a warning, not a big red error. It only goes properly red when the whole job has actually failed. One agent out of twelve having a bad moment shouldn't look like the house is on fire.
 
-- a small local **gateway** on the API path that heals transport failures (the retries and connectivity handling);
-- a **daemon** that watches the workflow journal on disk and drives recovery (the silent-loss detection, the 30-retry ledger, the usage-limit parking);
-- a **control plane**, an MCP server plus a `lifeline` status view, for the pause, resume, enqueue, and templating controls.
+**You can pause and resume.** Pause one agent, or a whole workflow and every agent under it, by hand whenever you want. lifeline also pauses on its own the moment your internet drops, and picks back up when it returns, so going through a tunnel doesn't quietly burn through all your retries.
 
-Anthropic's binary stays untouched and signed. `claude` stays `claude`.
+**You can change the work while it's running.** Hand a running workflow a new task, or pull a task you haven't started yet, without tearing the whole thing down and building it again from scratch.
+
+**Your regular jobs become templates.** The workflows you run over and over can be saved and re-run whenever you like. lifeline can also look back through everything you've run and point out the ones you keep rebuilding by hand, so you can save them once.
+
+**Claude knows it can do all this.** Claude Code's own assistant is told about these abilities, so it can offer to retry a failed agent, pause a run, add a task, or reach for one of your templates, without you having to spell it out.
+
+## How it works
+
+The honest version, because it's the interesting part.
+
+lifeline never changes or touches the actual Claude Code app that Anthropic ships. That app is sealed shut, and it gets fully replaced every time it updates, so reaching inside it would be both risky and a waste of time. lifeline works entirely from the outside, through three quiet helpers:
+
+- one sits on the line between Claude and the internet and smooths over the connection hiccups before they ever reach you;
+- one keeps an eye on your running workflows and steps in to recover any agent that falls over;
+- one gives you, and Claude, the buttons: pause, resume, add work, save a template.
+
+Your command is still just `claude`. lifeline is doing its job in the background while you carry on exactly as before.
+
+## How it keeps working when Claude Code updates
+
+Claude Code updates itself roughly every day. Because lifeline never edits that app, an update can't break it the way editing it would.
+
+lifeline keeps a fingerprint of the handful of things it counts on staying the same shape. Every time Claude Code updates, a quiet background check re-confirms that fingerprint still matches. If Anthropic ever changes something lifeline leans on, it tells you plainly and steps back rather than doing anything clever. It never guesses. On top of that, an automated check runs every day against each new Claude Code release, so if something ever does shift, it's usually caught before it would reach you at all.
 
 ## Install
 
-macOS, one command:
+macOS, one line:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/lprhodes/lifeline/main/install.sh | bash
 ```
 
-It installs the gateway, the daemon, the MCP server, the `lifeline` CLI, and a launchd watcher; repoints your own `claude` launcher through the gateway; and then leaves you alone.
+That sets everything up, points Claude Code through lifeline, and gets out of your way. Your command stays `claude`.
 
-Note: if you set `ANTHROPIC_API_KEY` directly it bypasses the gateway, so lifeline can't heal transport errors on that path. The installer flags this and shows you how to route through it instead.
+**Check it's working:**
 
-## Status and roadmap
+```bash
+lifeline status    # what your workflows are doing right now
+lifeline doctor    # a quick health check of lifeline itself
+```
 
-v1 is the resilience core, the part that kills the top three failure modes above:
+**Remove it cleanly** (restores everything to exactly how it was, one line, nothing to set up first):
 
-- auto-retry with backoff and the 30-attempt ledger
-- usage-limit and accounts-exhausted recovery
-- silent-loss detection and resume
-- the MCP server that teaches Claude's own model to check status, retry, pause, and resume
-- the one-command installer and fail-closed version check
-- the fault-injection eval harness
+```bash
+curl -fsSL https://raw.githubusercontent.com/lprhodes/lifeline/main/uninstall.sh | bash
+```
 
-Staged after that:
+One note worth knowing: if you set an `ANTHROPIC_API_KEY` directly in your shell, Claude Code talks straight to the internet and skips past lifeline, so it can't help on that path. `lifeline doctor` will tell you if that's happening.
 
-- **the control-plane UI**: the richer status view and the red-cross-to-warning display, plus enqueue/dequeue of work in a running workflow
-- **templating**: save and reuse your common workflows
-- **an optional deeper hook** for the npm/`node` install of Claude Code, where the built-in view itself can be recoloured
+## Where it's at
 
-(Messaging a specific running agent already works natively in Claude Code via SendMessage; lifeline doesn't duplicate it.)
-
-I'd rather ship the core that stops the bleeding first and be honest that the rest is coming, than claim the whole thing on day one.
-
-## A note on the built-in feature
-
-lifeline doesn't replace Claude Code's Workflow feature; it hardens the one that's already there. You keep the built-in fan-out, the journal, the resume path. lifeline is the layer that makes them hold up when the API has a bad night.
+lifeline is macOS-focused for now. The core, the part that stops your work quietly disappearing, is done, tested, and running. A proper status window and a few other bits of polish are still on the way. I'd rather ship the thing that fixes the actual problem and be straight about what's still coming than dress it up.
 
 ## Licence
 

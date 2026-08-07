@@ -180,7 +180,7 @@ cat <<EOF
 lifeline is set up. Your command is still 'claude'.
   - status:  lifeline status
   - health:  lifeline doctor
-  - remove:  ${SRC}/install/uninstall.sh
+  - remove:  curl -fsSL https://raw.githubusercontent.com/lprhodes/lifeline/main/uninstall.sh | bash
 
 Note: if you set ANTHROPIC_API_KEY directly, claude bypasses the gateway and lifeline
 can't heal transport errors on that path. 'lifeline doctor' will warn you if so.
