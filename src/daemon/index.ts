@@ -10,8 +10,7 @@
  */
 
 import { readdirSync, rmSync, statSync } from "node:fs";
-import { relative, sep } from "node:path";
-import { watch, type FSWatcher } from "chokidar";
+import { basename, join, relative, sep } from "node:path";
 import { exponentialCeiling } from "../shared/backoff.js";
 import type { LifelineConfig } from "../shared/config.js";
 import { loadConfig } from "../shared/config.js";
@@ -139,6 +138,58 @@ export function runDirOf(base: string, path: string): string | null {
   return [base, ...segs.slice(0, 5)].join(sep);
 }
 
+/**
+ * Discover workflow run directories touched within `windowMs`, WITHOUT holding a
+ * filesystem watch handle. This is the daemon's primary discovery mechanism: a recursive
+ * chokidar watch over the projects tree opens a handle per directory, and with 12k+
+ * project directories that exhausts the (low, launchd-imposed) file-descriptor limit and
+ * crash-loops the daemon (EMFILE) — the very kind of fragility lifeline exists to remove.
+ *
+ * Directory mtimes make this cheap: a project/session directory's mtime only bumps when a
+ * child is added or removed, and a live run touches its whole ancestor chain constantly.
+ * So we descend only into branches whose mtime is inside the window, skipping the
+ * thousands of static historical directories at the top level. Pure fs reads; testable
+ * against a temp tree.
+ */
+export function discoverActiveRunDirs(
+  base: string,
+  windowMs: number,
+  now: number,
+): string[] {
+  const cutoff = now - windowMs;
+  const out: string[] = [];
+
+  const recent = (dir: string): boolean => {
+    try {
+      return statSync(dir).mtimeMs >= cutoff;
+    } catch {
+      return false;
+    }
+  };
+  const kids = (dir: string): string[] => {
+    try {
+      return readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => join(dir, e.name));
+    } catch {
+      return [];
+    }
+  };
+
+  for (const project of kids(base)) {
+    if (!recent(project)) continue; // whole project untouched in the window — skip its sessions
+    for (const session of kids(project)) {
+      if (!recent(session)) continue;
+      const workflows = join(session, "subagents", "workflows");
+      if (!recent(workflows)) continue;
+      for (const runDir of kids(workflows)) {
+        if (basename(runDir).startsWith("wf_") && recent(runDir)) out.push(runDir);
+      }
+    }
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ *
  * Daemon
  * ------------------------------------------------------------------ */
@@ -149,7 +200,7 @@ export interface DaemonDeps {
   /** Injectable scan so tests drive the daemon off fixtures without a watcher. */
   scan?: ((runDir: string, opts: { now: number; liveWindowMs: number }) => RunScan | null) | undefined;
   relaunch?: RelaunchDeps | undefined;
-  /** Skip the chokidar watcher (tests tick manually). */
+  /** Skip discovery/live scanning (tests tick manually via markDirty). */
   watch?: boolean | undefined;
 }
 
@@ -183,7 +234,6 @@ export function startDaemon(
   let online = true;
   let lastConnectivityAt = 0;
   let stopped = false;
-  let watcher: FSWatcher | null = null;
   let timer: NodeJS.Timeout | null = null;
 
   log.info(`watching ${base}`, { ledgers: ledgers.size, tickMs: cfg.daemonTickMs });
@@ -419,6 +469,13 @@ export function startDaemon(
   async function tick(): Promise<void> {
     if (stopped) return;
     try {
+      // Primary discovery: find run dirs touched since a bit before the last tick and
+      // mark them dirty. No persistent fs handles, so this cannot EMFILE regardless of
+      // how large the projects tree grows or how low the process fd limit is.
+      if (deps.watch !== false) {
+        const window = Math.max(cfg.daemonTickMs * 3, 30_000);
+        for (const runDir of discoverActiveRunDirs(base, window, now())) markDirty(runDir);
+      }
       for (const runDir of [...dirty]) {
         dirty.delete(runDir);
         try {
@@ -437,27 +494,15 @@ export function startDaemon(
   }
 
   if (deps.watch !== false) {
-    watcher = watch(base, {
-      ignored: makeIgnorePredicate(base),
-      depth: 6,
-      ignoreInitial: true, // live runs arrive as events; restart continuity comes from the ledgers
-      awaitWriteFinish: { stabilityThreshold: 400, pollInterval: 100 },
-    });
-    const onPath = (p: string): void => {
-      const runDir = runDirOf(base, p);
-      if (runDir) markDirty(runDir);
-    };
-    watcher.on("add", onPath);
-    watcher.on("change", onPath);
-    watcher.on("unlink", onPath);
-    watcher.on("error", (err: unknown) => log.error("watcher error", String(err)));
-
-    // A ledger reloaded from disk names a run whose directory may still be producing events;
-    // re-ingest it once so a restart resumes with current facts rather than stale ones.
+    // A ledger reloaded from disk names a run whose directory may still be producing
+    // output; re-ingest it once so a restart resumes with current facts. Live discovery
+    // (in tick) is what keeps up thereafter — see discoverActiveRunDirs on why there is
+    // no recursive watcher.
     for (const ledger of ledgers.values()) {
       const dir = findRunDir(base, ledger);
       if (dir) markDirty(dir);
     }
+    void tick(); // first discovery pass immediately, don't wait a full interval
   }
 
   timer = setInterval(() => void tick(), cfg.daemonTickMs);
@@ -470,8 +515,6 @@ export function startDaemon(
       stopped = true;
       if (timer) clearInterval(timer);
       timer = null;
-      if (watcher) await watcher.close();
-      watcher = null;
     },
   };
 }

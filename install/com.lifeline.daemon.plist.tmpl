@@ -23,6 +23,18 @@
   <true/>
   <key>ThrottleInterval</key>
   <integer>10</integer>
+  <!-- launchd hands agents a low file-descriptor ceiling; raise it so a large
+       ~/.claude/projects tree can never starve the daemon of handles. -->
+  <key>SoftResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>8192</integer>
+  </dict>
+  <key>HardResourceLimits</key>
+  <dict>
+    <key>NumberOfFiles</key>
+    <integer>8192</integer>
+  </dict>
   <key>StandardOutPath</key>
   <string>@@LIFELINE_HOME@@/logs/daemon.out.log</string>
   <key>StandardErrorPath</key>
