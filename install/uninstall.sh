@@ -18,6 +18,13 @@ for svc in gateway daemon watcher; do
   say "removed com.lifeline.${svc}"
 done
 
+# Restore the settings.json base URL captured at install time (exact revert).
+if [[ -f "${LIFELINE_HOME}/settings-base-url.orig.json" ]] && command -v node >/dev/null 2>&1; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+  restored="$(LIFELINE_HOME="${LIFELINE_HOME}" node "${SCRIPT_DIR}/patch-settings.mjs" revert || true)"
+  say "restored settings.json base URL${restored:+ -> ${restored}}"
+fi
+
 # Restore the real claude launcher.
 if [[ -f "${LIFELINE_HOME}/real-claude" ]]; then
   real_target="$(cat "${LIFELINE_HOME}/real-claude")"

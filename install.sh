@@ -22,10 +22,19 @@ LIFELINE_HOME="${LIFELINE_HOME:-$HOME/.lifeline}"
 APP_DIR="${LIFELINE_HOME}/app"
 GATEWAY_PORT="${LIFELINE_GATEWAY_PORT:-8787}"
 # Upstream resolution: an explicit LIFELINE_UPSTREAM wins; otherwise, if the user
-# already routes claude through a proxy via ANTHROPIC_BASE_URL, CHAIN it (the gateway
-# forwards to the proxy, which forwards to the API) rather than cutting it out.
+# already routes claude through a proxy — via shell env OR ~/.claude/settings.json env
+# (which Claude Code applies itself and which outranks inherited env) — CHAIN it: the
+# gateway forwards to the proxy, which forwards to the API.
+settings_base_url=""
+if command -v node >/dev/null 2>&1 && [[ -f "$HOME/.claude/settings.json" ]]; then
+  settings_base_url="$(node -e '
+    try { const s = require(process.env.HOME + "/.claude/settings.json");
+      process.stdout.write((s.env && s.env.ANTHROPIC_BASE_URL) || ""); } catch {}' 2>/dev/null || true)"
+fi
 if [[ -n "${LIFELINE_UPSTREAM:-}" ]]; then
   UPSTREAM="${LIFELINE_UPSTREAM}"
+elif [[ -n "${settings_base_url}" && "${settings_base_url}" != http://127.0.0.1:${GATEWAY_PORT}* ]]; then
+  UPSTREAM="${settings_base_url}"
 elif [[ -n "${ANTHROPIC_BASE_URL:-}" && "${ANTHROPIC_BASE_URL}" != http://127.0.0.1:${GATEWAY_PORT}* ]]; then
   UPSTREAM="${ANTHROPIC_BASE_URL}"
 else
@@ -75,16 +84,19 @@ say "installing dependencies and building"
 [[ -f "${SRC}/dist/gateway/server.js" ]] || die "build did not produce dist/. Check ${LIFELINE_HOME}/logs."
 
 # --- config ------------------------------------------------------------------------
-if [[ ! -f "${LIFELINE_HOME}/config.json" ]]; then
-  cat > "${LIFELINE_HOME}/config.json" <<JSON
-{
-  "gatewayHost": "127.0.0.1",
-  "gatewayPort": ${GATEWAY_PORT},
-  "upstream": "${UPSTREAM}"
-}
-JSON
-  say "wrote ${LIFELINE_HOME}/config.json (upstream ${UPSTREAM})"
-fi
+# lifeline owns this file: merge-update the routing keys on every install so a changed
+# proxy or port takes effect, preserving any hand-edited tuning keys.
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+  cfg.gatewayHost = "127.0.0.1";
+  cfg.gatewayPort = Number(process.argv[2]);
+  cfg.upstream = process.argv[3];
+  fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+' "${LIFELINE_HOME}/config.json" "${GATEWAY_PORT}" "${UPSTREAM}"
+say "config: gateway :${GATEWAY_PORT} -> upstream ${UPSTREAM}"
 
 # --- record the real claude binary + repoint the launcher --------------------------
 CLAUDE_LINK="${LOCAL_BIN}/claude"
@@ -136,6 +148,15 @@ for svc in gateway daemon watcher; do
   launchctl bootstrap "gui/$(id -u)" "${plist}" >/dev/null 2>&1 || launchctl load "${plist}" >/dev/null 2>&1 || true
   say "loaded com.lifeline.${svc}"
 done
+
+# --- chain ~/.claude/settings.json through the gateway ------------------------------
+# Claude Code applies settings.json env itself (outranking the wrapper's export), so if a
+# base URL lives there it must be repointed at the gateway; its old value is already the
+# gateway's upstream. Recorded for exact revert by uninstall.sh.
+if [[ -n "${settings_base_url}" ]]; then
+  captured="$(LIFELINE_HOME="${LIFELINE_HOME}" "${NODE_BIN}" "${SRC}/install/patch-settings.mjs" apply "http://127.0.0.1:${GATEWAY_PORT}")" || true
+  say "settings.json base URL -> gateway (was: ${captured:-none}; now chained through it)"
+fi
 
 # --- fingerprint baseline for the installed version --------------------------------
 "${NODE_BIN}" "${SRC}/dist/fingerprint/index.js" --baseline >/dev/null 2>&1 || \
