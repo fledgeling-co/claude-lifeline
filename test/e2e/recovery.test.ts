@@ -60,6 +60,11 @@ function normalLine(text: string): Record<string, unknown> {
   };
 }
 
+/** A transcript line stamped at a specific time, so a test can control a run's last activity. */
+function stampedLine(text: string, tsMs: number): Record<string, unknown> {
+  return { ...normalLine(text), timestamp: new Date(tsMs).toISOString() };
+}
+
 function apiErrorLine(status: number, text: string, errorCode: string): Record<string, unknown> {
   // The exact shape the runtime writes on an API failure (FINDINGS.md "API error path").
   return {
@@ -540,11 +545,90 @@ describe("recovery e2e", () => {
     );
     expect(run.state).toBe("running");
     // v2: healthy agents are surfaced with telemetry (names, durations, context) so the UI
-    // can show them; recovery still never fired, so the ledger stays empty.
-    expect(run.agents.map((a) => a.state).sort()).toEqual(["done", "retrying"]);
+    // can show them; a live healthy agent reads as `running`, never `retrying` (attempts 0),
+    // and recovery still never fired, so the ledger stays empty.
+    expect(run.agents.map((a) => a.state).sort()).toEqual(["done", "running"]);
+    expect(renderStatus(snapshot, { color: false, now: clock })).toMatch(/\brunning\b/);
     expect(Object.keys(loadLedger("wf_gamma").entries)).toHaveLength(0);
     expect(calls).toHaveLength(0);
     expect(renderStatus(snapshot, { color: false, now: clock })).not.toMatch(/\bwarning\b/);
+  });
+
+  it("shows active runs first and only recently-finished ones, greyed, below", async () => {
+    // The status list is for active work: a finished run trails at the bottom for an hour,
+    // then drops off entirely. (The UI greys the trailing ones; the daemon just orders + trims.)
+    const clock = Date.now() + 60_000;
+    const live = writeRun(tmp.env.projects, "wf_live", {
+      journal: [
+        { type: "started", key: "1".repeat(64), agentId: "L1" },
+        { type: "result", key: "1".repeat(64), agentId: "L1", result: "done" },
+        { type: "started", key: "2".repeat(64), agentId: "L2" },
+      ],
+      transcripts: {
+        L1: [stampedLine("LL-0070 done.", clock - 90_000)],
+        L2: [stampedLine("Still working LL-0071.", clock - 30_000)],
+      },
+    });
+    const recent = writeRun(tmp.env.projects, "wf_recent", {
+      journal: [
+        { type: "started", key: "3".repeat(64), agentId: "R1" },
+        { type: "result", key: "3".repeat(64), agentId: "R1", result: "done" },
+      ],
+      transcripts: { R1: [stampedLine("LL-0072 merged.", clock - 10 * 60_000)] }, // 10m ago
+    });
+    const old = writeRun(tmp.env.projects, "wf_old", {
+      journal: [
+        { type: "started", key: "4".repeat(64), agentId: "O1" },
+        { type: "result", key: "4".repeat(64), agentId: "O1", result: "done" },
+      ],
+      transcripts: { O1: [stampedLine("LL-0073 merged.", clock - 2 * 60 * 60_000)] }, // 2h ago
+    });
+
+    const daemon = start(testConfig(), { now: () => clock, rng: () => 0.25, watch: false });
+    handles.push(daemon);
+    for (const r of [live, recent, old]) daemon.markDirty(r.runDir);
+    await daemon.tick();
+
+    const snapshot = must(readJson<StatusSnapshot | null>(paths.status(), null), "status.json");
+    const ids = snapshot.runs.map((r) => r.runId);
+    // The old completed run is gone; the live and recently-finished ones remain.
+    expect(ids).toContain("wf_live");
+    expect(ids).toContain("wf_recent");
+    expect(ids).not.toContain("wf_old");
+    // Active leads; the finished run trails.
+    expect(ids.indexOf("wf_live")).toBeLessThan(ids.indexOf("wf_recent"));
+    expect(must(snapshot.runs.find((r) => r.runId === "wf_live"), "wf_live").state).toBe("running");
+    expect(must(snapshot.runs.find((r) => r.runId === "wf_recent"), "wf_recent").state).toBe("completed");
+  });
+
+  it("drops an abandoned run whose agents stalled hours ago, keeps a live one", async () => {
+    // The ghost-fleet bug: an old fleet whose agents all stalled (no live agent, no scheduled
+    // retry) sat forever as "recovering". Once idle past the completed-retention window it must
+    // drop, while a run with a genuinely live agent stays.
+    const clock = Date.now() + 60_000;
+    const ghost = writeRun(tmp.env.projects, "wf_ghost", {
+      journal: [{ type: "started", key: "7".repeat(64), agentId: "G1" }],
+      // last output ~2h ago, no result, no error → stalled and idle well past 1h
+      transcripts: { G1: [stampedLine("Editing src/x.ts", clock - 2 * 60 * 60_000)] },
+    });
+    const live = writeRun(tmp.env.projects, "wf_live2", {
+      journal: [{ type: "started", key: "8".repeat(64), agentId: "V1" }],
+      transcripts: { V1: [stampedLine("Working", clock - 20_000)] },
+    });
+
+    const daemon = start(
+      testConfig({ liveWindowMs: 5 * 60 * 60_000, stallWindowMs: 600_000 }),
+      { now: () => clock, rng: () => 0.25, watch: false },
+    );
+    handles.push(daemon);
+    daemon.markDirty(ghost.runDir);
+    daemon.markDirty(live.runDir);
+    await daemon.tick();
+
+    const snap = must(readJson<StatusSnapshot | null>(paths.status(), null), "status.json");
+    const ids = snap.runs.map((r) => r.runId);
+    expect(ids).toContain("wf_live2");
+    expect(ids).not.toContain("wf_ghost");
   });
 
   it("computeRunState: the rollup rules the status surface depends on", () => {

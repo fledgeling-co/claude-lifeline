@@ -277,6 +277,14 @@ export function startDaemon(
       contextLimitTokens: cfg.contextLimitTokens,
     });
     if (!result) return;
+    // An abandoned run (no live agent, idle past its grace, not waiting out a reset) is dropped
+    // at its source: forget it AND delete its persisted ledger, so a re-discovery this tick or a
+    // daemon restart can't resurrect it. Without the file delete, every restart reloaded the
+    // stale ledger from disk and the ghost fleet rows came back.
+    if (runIsAbandoned(result, ledgers.get(result.runId), t)) {
+      forgetRun(result.runId);
+      return;
+    }
     scans.set(result.runId, result);
 
     let ledger =
@@ -512,6 +520,7 @@ export function startDaemon(
         lastClass: entry?.lastClass ?? null,
         durationMs: a.durationMs,
         contextFrac: a.contextFrac,
+        contextTokens: a.contextTokens,
         stalledForMs: a.kind === "stalled" ? a.quietForMs : null,
         tail: a.tail,
       });
@@ -537,6 +546,15 @@ export function startDaemon(
       null,
     );
 
+    // Compact row counts, from the scan's unambiguous kinds. "running" is LIVE agents only —
+    // a stalled agent has stopped producing output, so counting it as running was the bug that
+    // showed an abandoned fleet as "9 running". "pending" is planned-minus-started when known.
+    const scanAgents = run?.agents ?? [];
+    const runningCount = scanAgents.filter((a) => a.kind === "live").length;
+    const doneCount = scanAgents.filter((a) => a.kind === "done").length;
+    const pendingCount =
+      run?.plannedCount != null ? Math.max(0, run.plannedCount - scanAgents.length) : null;
+
     return {
       runId: ledger.runId,
       project: ledger.project,
@@ -544,6 +562,9 @@ export function startDaemon(
       workspace: run?.workspace ?? null,
       state: computeRunState(views),
       agents,
+      runningCount,
+      pendingCount,
+      doneCount,
       durationMs: run?.startedAtMs != null ? t - run.startedAtMs : null,
       contextFrac,
       note: runNote(run),
@@ -586,7 +607,7 @@ export function startDaemon(
       case "stalled":
         return "stalled";
       case "live":
-        return "retrying"; // a live, healthy agent; run-level rollup reads this as "running"
+        return "running"; // a live, healthy agent — working, not recovering
     }
   }
 
@@ -611,12 +632,24 @@ export function startDaemon(
     return Math.max(scanResult.startedAtMs ?? 0, ...scanResult.agents.map((a) => a.lastTsMs ?? 0));
   }
 
+  /** A run whose work is over — completed cleanly or with a terminal failure. */
+  function isDoneState(s: RunState): boolean {
+    return s === "completed" || s === "completed-with-failures";
+  }
+
   function writeStatus(): void {
-    // Newest-active first, capped: the window shows recent work, not the whole history.
-    const runs = [...ledgers.values()]
-      .sort((a, b) => lastActivityOf(b.runId) - lastActivityOf(a.runId))
-      .slice(0, cfg.maxRunsShown)
-      .map(statusRunOf);
+    // Active work leads the list, newest-active first. A run that has finished drops out of
+    // the active view and, if it ended within the last hour, trails at the bottom (greyed in
+    // the UI) so a just-finished run doesn't vanish mid-glance; older finished runs are gone.
+    const t = now();
+    const all = [...ledgers.values()].map((l) => ({ run: statusRunOf(l), at: lastActivityOf(l.runId) }));
+    const active = all.filter((r) => !isDoneState(r.run.state)).sort((a, b) => b.at - a.at);
+    // Keep a finished run at the bottom unless we can PROVE it ended over an hour ago; when its
+    // activity time is unknown (at === 0) we keep it rather than silently hide a just-done run.
+    const doneRecent = all
+      .filter((r) => isDoneState(r.run.state) && !(r.at > 0 && t - r.at > cfg.completedRetentionMs))
+      .sort((a, b) => b.at - a.at);
+    const runs = [...active, ...doneRecent].slice(0, cfg.maxRunsShown).map((r) => r.run);
     const snapshot: StatusSnapshot = {
       updatedAt: now(),
       online,
@@ -668,20 +701,55 @@ export function startDaemon(
    * the status window shows current work rather than growing without bound. A run with any
    * non-terminal ledger entry (still recovering) is always kept.
    */
+  /** Forget a run everywhere it persists: the in-memory maps AND its on-disk ledger, so it
+   *  cannot be reloaded on restart or re-ingested this tick. */
+  function forgetRun(runId: string): void {
+    scans.delete(runId);
+    ledgers.delete(runId);
+    try {
+      rmSync(paths.ledgerFile(runId), { force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+
+  /**
+   * Is a run abandoned — safe to forget? A run genuinely waiting out an external reset it will
+   * resume from (a usage-limit / offline pause with a retry scheduled inside the retention
+   * window — the multi-account-proxy case) is NEVER abandoned; its ledger must survive so
+   * recovery can fire. Otherwise abandonment is idle time past a grace that depends on why it is
+   * quiet: a live agent still writing → the full retention window; all agents finished → the
+   * completed-retention window (the greyed "recently done" grace); no live agent and not done →
+   * stuck (stalled or paused mid-run), a short grace so a fleet that stopped producing output
+   * ~20 min ago stops showing as an active row.
+   */
+  function runIsAbandoned(scanResult: RunScan | undefined, ledger: RunLedger | undefined, t: number): boolean {
+    const entries = ledger ? Object.values(ledger.entries) : [];
+    const waitingForReset = entries.some(
+      (e) =>
+        (e.state === "paused-usage-limit" || e.state === "paused-offline") &&
+        e.nextRetryAt != null &&
+        e.nextRetryAt > t &&
+        e.nextRetryAt - t <= cfg.retentionMs,
+    );
+    if (waitingForReset) return false;
+    const agents = scanResult?.agents ?? [];
+    if (agents.some((a) => a.kind === "live")) return false; // still working
+    const lastActivity = scanResult
+      ? Math.max(scanResult.startedAtMs ?? 0, ...agents.map((a) => a.lastTsMs ?? 0))
+      : (ledger?.updatedAt ?? 0);
+    const allDone = agents.length > 0 && agents.every((a) => a.kind === "done");
+    const idleLimit = allDone ? cfg.completedRetentionMs : 2 * cfg.stallWindowMs;
+    return lastActivity > 0 && t - lastActivity > idleLimit;
+  }
+
   function dropStaleRuns(): void {
     const t = now();
-    for (const [runId, scanResult] of scans) {
-      const ledger = ledgers.get(runId);
-      const recovering = ledger && Object.values(ledger.entries).some((e) => !isTerminal(e.state));
-      if (recovering) continue;
-      const lastActivity = Math.max(
-        scanResult.startedAtMs ?? 0,
-        ...scanResult.agents.map((a) => a.lastTsMs ?? 0),
-      );
-      if (lastActivity > 0 && t - lastActivity > cfg.retentionMs) {
-        scans.delete(runId);
-        ledgers.delete(runId);
-      }
+    // Iterate the ledgers — exactly the set writeStatus shows — so a run reloaded from a
+    // persisted ledger whose dir sits outside the discovery window (never re-scanned) is still
+    // reachable here.
+    for (const [runId, ledger] of ledgers) {
+      if (runIsAbandoned(scans.get(runId), ledger, t)) forgetRun(runId);
     }
   }
 
@@ -698,7 +766,12 @@ export function startDaemon(
   }
 
   timer = setInterval(() => void tick(), cfg.daemonTickMs);
-  timer.unref();
+  // The interval is the daemon's ONLY long-lived handle now that discovery is mtime-polling
+  // rather than a persistent chokidar watch — so it MUST keep the event loop alive in
+  // production, or the process drains and exits (which had it silently dying every ~10s and
+  // limping along on launchd restarts). Only unref under `watch:false` (tests), where the
+  // caller drives tick() by hand and always stops the daemon in teardown.
+  if (deps.watch === false) timer.unref();
 
   return {
     tick,

@@ -31,6 +31,8 @@ export interface LifelineConfig {
   discoverIntervalMs: number;
   /** Keep showing a finished run this long after its last activity, then drop it. */
   retentionMs: number;
+  /** A completed run stays in the list, greyed at the bottom, only this long after finishing. */
+  completedRetentionMs: number;
   /** Most recent runs to show (by last activity); older ones are omitted. */
   maxRunsShown: number;
 }
@@ -50,6 +52,7 @@ export const DEFAULT_CONFIG: LifelineConfig = {
   discoverWindowMs: 3 * 60 * 60_000, // show workflow runs active in the last 3 hours
   discoverIntervalMs: 12_000, // full-tree discovery walk cadence
   retentionMs: 3 * 60 * 60_000, // keep a run visible as long as it's within the window
+  completedRetentionMs: 60 * 60_000, // show a finished run, greyed, for an hour after it ends
   maxRunsShown: 30, // cap the list to the most recent runs
 };
 
