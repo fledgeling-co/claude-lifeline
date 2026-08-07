@@ -2,6 +2,7 @@ import type { ErrorClass } from "./classifier.js";
 
 /** State of a single agent in the retry ledger. */
 export type AgentState =
+  | "running" // live and healthy — working, never in recovery
   | "retrying"
   | "stalled" // alive but produced no output / no context change for the stall window
   | "paused-offline"
@@ -75,6 +76,12 @@ export interface StatusRun {
   workspace?: string | null;
   state: RunState;
   agents: StatusAgent[];
+  /** Agents actively working right now (live or stalled), for the compact row summary. */
+  runningCount?: number | null;
+  /** Agents planned but not yet started (planned total minus started), or null if unknown. */
+  pendingCount?: number | null;
+  /** Agents that have finished, for a completed run's summary. */
+  doneCount?: number | null;
   /** Elapsed wall-clock of the run so far, ms (earliest agent activity → now). */
   durationMs?: number | null;
   /** Highest context-window fill across the run's agents, 0..1, or null if unknown. */
@@ -103,6 +110,8 @@ export interface StatusAgent {
   durationMs?: number | null;
   /** Context-window fill 0..1 from the latest usage record, or null if unknown. */
   contextFrac?: number | null;
+  /** Actual context tokens in the window (input + cache), the real number the TUI shows. */
+  contextTokens?: number | null;
   /** How long the agent has been quiet, ms — set when state is "stalled". */
   stalledForMs?: number | null;
   /** Last few cleaned transcript lines (newest last), for the expandable log. */

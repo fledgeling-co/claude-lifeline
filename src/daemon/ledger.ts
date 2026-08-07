@@ -20,6 +20,7 @@ import type { AgentState, LedgerEntry, RunLedger } from "../shared/types.js";
 
 /** States from which the daemon still intends to act on an entry. */
 const ACTIVE_STATES: ReadonlySet<AgentState> = new Set<AgentState>([
+  "running",
   "retrying",
   "stalled",
   "paused-offline",

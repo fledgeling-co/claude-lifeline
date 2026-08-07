@@ -72,6 +72,8 @@ export function formatRelative(atMs: number, nowMs: number): string {
  */
 export function formatAgentState(agent: StatusAgent, nowMs: number): string {
   switch (agent.state) {
+    case "running":
+      return "running";
     case "retrying": {
       const max = agent.maxAttempts > 0 ? agent.maxAttempts : DEFAULT_POLICY.maxAttempts;
       const head = `retrying (${agent.attempts}/${max}`;
@@ -113,6 +115,8 @@ export function formatRunState(state: RunState): string {
 
 function agentColor(state: AgentState): AnsiCode {
   switch (state) {
+    case "running":
+      return ANSI.green;
     case "retrying":
       return ANSI.yellow;
     case "stalled":
@@ -134,6 +138,7 @@ function agentGlyph(state: AgentState): string {
       return "x";
     case "done":
       return "+";
+    case "running":
     case "retrying":
     case "stalled":
     case "paused-offline":

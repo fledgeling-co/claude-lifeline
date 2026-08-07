@@ -11,7 +11,7 @@
  * truncated trailing line is normal and must never throw.
  */
 
-import { closeSync, fstatSync, openSync, readdirSync, readSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { Classification } from "../shared/classifier.js";
 import { classify } from "../shared/classifier.js";
@@ -23,6 +23,17 @@ const HEAD_BYTES = 32 * 1024;
 
 /** Human item ids the workflows carry, e.g. DIO-0012 / PH-010. */
 const ITEM_RE = /\b([A-Z]{2,10}-\d{3,4})\b/;
+
+/**
+ * A workflow agent's own identity, when its prompt declares one. Fleet prompts open with a
+ * `UNIT:` line (e.g. `UNIT: queued-tail-3`) naming the agent's slice of work — that IS the
+ * agent, and it must win over any ticket id that merely appears in the prompt's scope text.
+ * Tolerant of raw JSONL (the transcript slice is unparsed, so its newline is an escaped `\n`).
+ */
+const UNIT_RE = /(?:^|\\n|[\r\n"])[ \t]*UNIT:[ \t]*([^\s"\\]+)/i;
+
+/** The 1m-context window; a run whose fill exceeds the default limit is re-scaled to this. */
+const LARGE_CONTEXT_LIMIT = 1_000_000;
 
 /**
  * Text markers that identify an API-error tail. These are only ever consulted alongside a
@@ -91,6 +102,8 @@ export interface RunScan {
   workflowName: string | null;
   /** The workspace (repo) the run worked in, e.g. "diolog-swe-bench" — basename of cwd. */
   workspace: string | null;
+  /** Total agents the workflow planned, from the snapshot — null when not yet known. */
+  plannedCount: number | null;
 }
 
 export interface StalledAgent {
@@ -114,6 +127,8 @@ export interface AgentTelemetry {
   durationMs: number | null;
   /** Context-window fill 0..1 from the latest usage record, or null when none seen. */
   contextFrac: number | null;
+  /** Actual context tokens in the window right now (input + both cache tiers). */
+  contextTokens: number | null;
   quietForMs: number | null;
   tail: string[];
 }
@@ -229,6 +244,32 @@ export function parseItemId(text: string): string | null {
   return m && m[1] ? m[1] : null;
 }
 
+/** The agent's declared `UNIT:` identity from its prompt, trimmed and length-capped. */
+export function parseUnit(text: string): string | null {
+  const m = UNIT_RE.exec(text);
+  if (!m || !m[1]) return null;
+  const unit = m[1].trim();
+  return unit ? unit.slice(0, 60) : null;
+}
+
+/**
+ * The name to show for an agent, best-first: its own declared `UNIT:` identity, then a ticket
+ * id or the workflow's per-agent label. A ticket merely mentioned in the prompt's scope is the
+ * last thing to fall back to, never the first — that was the bug that named agents "WEB-4763".
+ */
+export function agentIdentity(headText: string | null, label: string | null): string | null {
+  if (headText) {
+    const unit = parseUnit(headText);
+    if (unit) return unit;
+  }
+  if (label) {
+    const unit = parseUnit(label);
+    if (unit) return unit;
+    return parseItemId(label) ?? label;
+  }
+  return headText ? parseItemId(headText) : null;
+}
+
 /** The `cwd` every transcript line carries — the repo the agent worked in. */
 export function parseCwd(text: string): string | null {
   for (const line of lastLines(text, 40)) {
@@ -262,11 +303,16 @@ export function contextFracFromUsage(
   model: string,
   defaultLimit: number,
 ): number | null {
-  const n = (k: string): number => (typeof usage[k] === "number" ? (usage[k] as number) : 0);
-  const used = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
+  const used = contextUsedFromUsage(usage);
   if (used <= 0) return null;
   const limit = /\[1m\]|-1m\b|1m\b/i.test(model) ? 1_000_000 : defaultLimit;
   return Math.min(1, used / limit);
+}
+
+/** The tokens actually occupying the context window: prompt + both cache tiers. */
+export function contextUsedFromUsage(usage: Record<string, unknown>): number {
+  const n = (k: string): number => (typeof usage[k] === "number" ? (usage[k] as number) : 0);
+  return n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
 }
 
 /** A short, human line from an assistant/user transcript entry, for the tail log. */
@@ -289,7 +335,15 @@ export function readTelemetry(
   tailText: string,
   defaultLimit: number,
   tailCount = 4,
-): { firstTsMs: number | null; lastTsMs: number | null; contextFrac: number | null; tail: string[] } {
+): {
+  firstTsMs: number | null;
+  lastTsMs: number | null;
+  contextFrac: number | null;
+  contextTokens: number | null;
+  contextPeak: number | null;
+  model: string;
+  tail: string[];
+} {
   let firstTsMs: number | null = null;
   for (const line of lastLines(headText, 200)) {
     try {
@@ -308,6 +362,8 @@ export function readTelemetry(
 
   let lastTsMs: number | null = null;
   let contextFrac: number | null = null;
+  let contextTokens: number | null = null;
+  let contextPeak: number | null = null;
   let model = "";
   const tailAll: string[] = [];
   for (const line of lastLines(tailText, 200)) {
@@ -327,6 +383,11 @@ export function readTelemetry(
       }
       const usage = isRecord(message["usage"]) ? message["usage"] : null;
       if (usage) {
+        const used = contextUsedFromUsage(usage);
+        if (used > 0) {
+          contextTokens = used; // current fill = newest usage record
+          contextPeak = contextPeak == null ? used : Math.max(contextPeak, used);
+        }
         const frac = contextFracFromUsage(usage, model, defaultLimit);
         if (frac !== null) contextFrac = frac;
       }
@@ -339,6 +400,9 @@ export function readTelemetry(
     firstTsMs,
     lastTsMs,
     contextFrac,
+    contextTokens,
+    contextPeak,
+    model,
     tail: tailAll.slice(Math.max(0, tailAll.length - tailCount)),
   };
 }
@@ -440,6 +504,8 @@ interface RunSnapshot {
   args?: unknown;
   workflowProgress?: unknown;
   workflowName?: unknown;
+  /** Total agents the workflow planned to run — the denominator for "pending". */
+  agentCount?: unknown;
 }
 
 /**
@@ -464,6 +530,78 @@ export function deriveWorkflowName(
   } catch {
     /* no scripts dir yet */
   }
+  // Last resort for a live run with no snapshot/script yet: recover the name from the caller
+  // session's Workflow tool-call. The caller transcript can be large (tens of MB), so this is
+  // cached: a positive is cached forever, and a negative is retried only a few times (a run's
+  // Workflow call is logged at start, so a name that isn't there after a few scans won't appear)
+  // — this stops a nameless run re-reading the whole transcript on every 12s discovery tick.
+  const cacheKey = `${sessionDir}::${runId}`;
+  const cached = WORKFLOW_NAME_CACHE.get(cacheKey);
+  if (cached && (cached.name !== null || cached.attempts >= 3)) return cached.name;
+  const fromCaller = workflowNameFromCaller(sessionDir, runId);
+  WORKFLOW_NAME_CACHE.set(cacheKey, { name: fromCaller, attempts: (cached?.attempts ?? 0) + 1 });
+  return fromCaller;
+}
+
+/** name-by-run cache: positives forever, negatives up to a few attempts (see deriveWorkflowName). */
+const WORKFLOW_NAME_CACHE = new Map<string, { name: string | null; attempts: number }>();
+
+/**
+ * Recover a workflow's `meta.name` from the caller session transcript: find the `Workflow`
+ * tool-call whose result carries this runId, and read the name from its inline script or the
+ * basename of its scriptPath. Cheap despite the file size — only lines that mention `Workflow`
+ * or the runId are ever JSON-parsed.
+ */
+export function workflowNameFromCaller(sessionDir: string, runId: string): string | null {
+  let text: string;
+  try {
+    text = readFileSync(`${sessionDir}.jsonl`, "utf8");
+  } catch {
+    return null;
+  }
+  const nameByUseId = new Map<string, string>();
+  let targetUseId: string | null = null;
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    if (!line.includes('"Workflow"') && !line.includes(runId)) continue;
+    let obj: unknown;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(obj)) continue;
+    const message = isRecord(obj["message"]) ? obj["message"] : null;
+    const content = message && Array.isArray(message["content"]) ? message["content"] : null;
+    if (!content) continue;
+    for (const block of content) {
+      if (!isRecord(block)) continue;
+      if (block["type"] === "tool_use" && block["name"] === "Workflow" && typeof block["id"] === "string") {
+        const input = isRecord(block["input"]) ? block["input"] : {};
+        const name = workflowNameFromInput(input);
+        if (name) nameByUseId.set(block["id"], name);
+      } else if (block["type"] === "tool_result" && typeof block["tool_use_id"] === "string") {
+        if (JSON.stringify(block).includes(runId)) targetUseId = block["tool_use_id"];
+      }
+    }
+  }
+  return targetUseId ? (nameByUseId.get(targetUseId) ?? null) : null;
+}
+
+/** The workflow name declared by a `Workflow` tool-call input: inline `meta.name`, else the
+ *  basename (sans extension and any trailing run id) of its scriptPath. */
+function workflowNameFromInput(input: Record<string, unknown>): string | null {
+  const script = input["script"];
+  if (typeof script === "string") {
+    const m = /name:\s*['"]([^'"]+)['"]/.exec(script);
+    if (m && m[1]) return m[1];
+  }
+  const scriptPath = input["scriptPath"];
+  if (typeof scriptPath === "string" && scriptPath) {
+    const base = basename(scriptPath).replace(/\.[^.]+$/, "");
+    const stem = base.replace(/-wf_[a-z0-9-]+$/i, "");
+    return stem || null;
+  }
   return null;
 }
 
@@ -471,6 +609,10 @@ export function deriveWorkflowName(
 export function workspaceFromCwd(cwd: string | null): string | null {
   if (!cwd) return null;
   const parts = cwd.split("/").filter((p) => p.length > 0);
+  // A worktree cwd is `<repo>/.claude/worktrees/<name>`; the workspace is the repo, not the
+  // worktree folder, so a fleet agent reads as its repo (dAIolog), not `wf_36168341-ea2-2`.
+  const dot = parts.indexOf(".claude");
+  if (dot > 0 && parts[dot + 1] === "worktrees") return parts[dot - 1] ?? null;
   return parts.at(-1) ?? null;
 }
 
@@ -555,8 +697,7 @@ export function scanRunDir(runDir: string, opts: ScanOptions): RunScan | null {
         });
       if (lostNow && sig) {
         const label = labels.get(agentId) ?? null;
-        const item =
-          (head ? parseItemId(head.text) : null) ?? (label ? (parseItemId(label) ?? label) : null);
+        const item = agentIdentity(head ? head.text : null, label);
         lost.push({
           key: key!,
           agentId,
@@ -576,8 +717,7 @@ export function scanRunDir(runDir: string, opts: ScanOptions): RunScan | null {
         // Alive (no error tail, not yet past the live window as a loss) but silent past the
         // stall window: nothing new written and, by the last usage record, no context change.
         const label = labels.get(agentId) ?? null;
-        const item =
-          (head ? parseItemId(head.text) : null) ?? (label ? (parseItemId(label) ?? label) : null);
+        const item = agentIdentity(head ? head.text : null, label);
         stalled.push({ key, agentId, item, quietForMs, transcriptFile: file, mtimeMs: tail.mtimeMs });
         kind = "stalled";
       } else {
@@ -590,15 +730,27 @@ export function scanRunDir(runDir: string, opts: ScanOptions): RunScan | null {
     agents.push({
       agentId,
       key,
-      item: (head ? parseItemId(head.text) : null) ?? (label2 ? (parseItemId(label2) ?? label2) : null),
+      item: agentIdentity(head ? head.text : null, label2),
       kind,
       firstTsMs: tele.firstTsMs,
       lastTsMs: tele.lastTsMs,
       durationMs,
       contextFrac: tele.contextFrac,
+      contextTokens: tele.contextTokens,
       quietForMs: kind === "stalled" ? quietForMs : null,
       tail: tele.tail,
     });
+  }
+
+  // Run-level context window: if any agent's context ever exceeded the default (200k), the run
+  // is on a 1m-context model, so re-scale every agent's fill against 1m. This is what stops a
+  // 197k-token agent on a 1m model from reading as 98% full. We only ever UP-scale (a model-tag
+  // already resolved to 1m in readTelemetry is never pulled back down).
+  const peak = agents.reduce((m, a) => Math.max(m, a.contextTokens ?? 0), 0);
+  if (peak > limit) {
+    for (const a of agents) {
+      if (a.contextTokens != null) a.contextFrac = Math.min(1, a.contextTokens / LARGE_CONTEXT_LIMIT);
+    }
   }
 
   return {
@@ -619,6 +771,10 @@ export function scanRunDir(runDir: string, opts: ScanOptions): RunScan | null {
     callerTail: readCallerTail(parts.sessionDir, 2),
     workflowName: deriveWorkflowName(parts.sessionDir, parts.runId, snapshot),
     workspace: workspaceFromCwd(cwd),
+    plannedCount:
+      snapshot && typeof snapshot.agentCount === "number" && Number.isFinite(snapshot.agentCount)
+        ? snapshot.agentCount
+        : null,
   };
 }
 

@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   contextFracFromUsage,
+  contextUsedFromUsage,
+  parseUnit,
+  agentIdentity,
+  workspaceFromCwd,
+  workflowNameFromCaller,
   readTelemetry,
   readCallerTail,
   scanRunDir,
@@ -130,5 +135,106 @@ describe("scanRunDir — telemetry, caller tail, and stall detection", () => {
     const scan = scanRunDir(runDir, { now, liveWindowMs: 300_000, stallWindowMs: 600_000, contextLimitTokens: 200_000 });
     expect(scan!.stalled).toHaveLength(0);
     expect(scan!.agents.find((a) => a.agentId === "b1")!.kind).toBe("live");
+  });
+
+  it("names agents by their UNIT, and rescales context to 1m once the window exceeds 200k", () => {
+    const { runDir } = layout();
+    const now = 1_000_000_000;
+    writeFileSync(
+      join(runDir, "journal.jsonl"),
+      jsonl([
+        { type: "started", key: "d".repeat(64), agentId: "u1" },
+        { type: "started", key: "e".repeat(64), agentId: "u2" },
+      ]),
+    );
+    // u1: a big-context agent (404k tokens) whose prompt scope mentions a ticket, but its
+    // real identity is the UNIT. u2: 197k tokens — under 200k on its own, but a 1m sibling.
+    writeFileSync(
+      join(runDir, "agent-u1.jsonl"),
+      jsonl([
+        assistant("UNIT: queued-tail-3\nSCOPE: finish WEB-4763 and WEB-4874.", now - 300_000),
+        assistant("Editing files", now - 30_000, { input_tokens: 200, cache_creation_input_tokens: 4_000, cache_read_input_tokens: 400_000 }, "claude-opus-5"),
+      ]),
+    );
+    writeFileSync(
+      join(runDir, "agent-u2.jsonl"),
+      jsonl([
+        assistant("UNIT: expo-island-launch\nSCOPE: wire MOB-4801.", now - 300_000),
+        assistant("Editing files", now - 30_000, { input_tokens: 130, cache_read_input_tokens: 197_000 }, "claude-opus-5"),
+      ]),
+    );
+    const scan = scanRunDir(runDir, { now, liveWindowMs: 5_000_000, stallWindowMs: 600_000, contextLimitTokens: 200_000 })!;
+    const u1 = scan.agents.find((a) => a.agentId === "u1")!;
+    const u2 = scan.agents.find((a) => a.agentId === "u2")!;
+    // Identity is the UNIT, never the first ticket in the scope text.
+    expect(u1.item).toBe("queued-tail-3");
+    expect(u2.item).toBe("expo-island-launch");
+    // Real token counts are surfaced, and both fills are scaled against 1m (not 200k), so the
+    // 197k agent reads ~20%, not ~98%.
+    expect(u1.contextTokens).toBe(404_200);
+    expect(u2.contextTokens).toBe(197_130);
+    expect(u1.contextFrac).toBeCloseTo(404_200 / 1_000_000, 4);
+    expect(u2.contextFrac).toBeCloseTo(197_130 / 1_000_000, 4);
+  });
+});
+
+describe("agent identity", () => {
+  it("parseUnit extracts the UNIT line, trimmed", () => {
+    expect(parseUnit("UNIT: queued-tail-3\nSCOPE: ...")).toBe("queued-tail-3");
+    expect(parseUnit("preamble\n  unit:  expo-island-launch  \nmore")).toBe("expo-island-launch");
+    expect(parseUnit("no unit here")).toBeNull();
+  });
+
+  it("agentIdentity prefers the UNIT over a ticket id in the prompt, then falls back", () => {
+    // The bug: a ticket in the scope text won over the agent's real identity.
+    expect(agentIdentity("UNIT: queued-tail-3\nfix WEB-4763", null)).toBe("queued-tail-3");
+    // No UNIT: a workflow label wins over a scope ticket.
+    expect(agentIdentity("working on WEB-4763", "LL-0042 implement the ledger")).toBe("LL-0042");
+    // No UNIT, no label: fall back to a ticket id parsed from the prompt.
+    expect(agentIdentity("Starting DIO-0012 now", null)).toBe("DIO-0012");
+    expect(agentIdentity("nothing here", null)).toBeNull();
+  });
+
+  it("contextUsedFromUsage sums the prompt and both cache tiers", () => {
+    expect(contextUsedFromUsage({ input_tokens: 2, cache_creation_input_tokens: 50, cache_read_input_tokens: 100 })).toBe(152);
+    expect(contextUsedFromUsage({})).toBe(0);
+  });
+
+  it("workspaceFromCwd resolves a worktree path to its repo, not the worktree folder", () => {
+    expect(workspaceFromCwd("/Users/x/Dev/dAIolog/.claude/worktrees/wf_36168341-ea2-2")).toBe("dAIolog");
+    expect(workspaceFromCwd("/Users/x/Dev/diolog-swe-bench")).toBe("diolog-swe-bench");
+    expect(workspaceFromCwd(null)).toBeNull();
+  });
+
+  it("workflowNameFromCaller recovers meta.name from the caller's Workflow tool-call", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lifeline-caller-"));
+    const sessionDir = join(dir, "sess");
+    // A caller transcript: a Workflow tool_use (scriptPath) whose result carries the runId.
+    const useId = "toolu_ABC";
+    const lines = [
+      { type: "assistant", message: { content: [
+        { type: "tool_use", id: useId, name: "Workflow",
+          input: { scriptPath: "/tmp/x/scratchpad/devreview-remediate.mjs" } },
+      ]}},
+      { type: "user", message: { content: [
+        { type: "tool_result", tool_use_id: useId,
+          content: JSON.stringify({ runId: "wf_36168341-ea2", status: "queued" }) },
+      ]}},
+    ];
+    writeFileSync(`${sessionDir}.jsonl`, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    expect(workflowNameFromCaller(sessionDir, "wf_36168341-ea2")).toBe("devreview-remediate");
+    // An inline script's meta.name wins over scriptPath.
+    writeFileSync(
+      `${sessionDir}.jsonl`,
+      JSON.stringify({ type: "assistant", message: { content: [
+        { type: "tool_use", id: "u2", name: "Workflow", input: { script: "export const meta = { name: 'perch-fleet-run7' }" } },
+      ]}}) + "\n" +
+      JSON.stringify({ type: "user", message: { content: [
+        { type: "tool_result", tool_use_id: "u2", content: "{\"runId\":\"wf_zzz\"}" },
+      ]}}) + "\n",
+    );
+    expect(workflowNameFromCaller(sessionDir, "wf_zzz")).toBe("perch-fleet-run7");
+    expect(workflowNameFromCaller(sessionDir, "wf_absent")).toBeNull();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
