@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>lifeline — menu-bar popover mock</title>
+<style>
+  /* Reference mock for the SwiftUI popover. Kit values: 13px body, 24px controls,
+     popover radius 20, label tiers 85/50/25%, sentence case, arrow cursor, one accent
+     (mint) bound to health + primary action. Dark authored independently (graphite). */
+  * { box-sizing: border-box; margin: 0; cursor: default; }
+  body {
+    font: 13px/16px -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background: #8A8F98; padding: 40px; display: flex; gap: 40px; flex-wrap: wrap;
+  }
+  .stage { display: flex; flex-direction: column; gap: 10px; }
+  .stage > span { font-size: 11px; color: #2E3138; font-weight: 600; }
+
+  .popover {
+    width: 360px; border-radius: 20px; overflow: hidden;
+    box-shadow: 0 18px 50px rgba(0,0,0,0.35), 0 0 0 0.5px rgba(0,0,0,0.15);
+  }
+  /* light */
+  .light { background: rgba(246,246,248,0.94); color: rgba(0,0,0,0.85); }
+  .light .sec { color: rgba(0,0,0,0.5); } .light .ter { color: rgba(0,0,0,0.25); }
+  .light .row:hover { background: rgba(0,0,0,0.04); }
+  .light .divider { background: rgba(0,0,0,0.08); }
+  .light .btn { background: rgba(0,0,0,0.05); }
+  .light .btn:hover { background: rgba(0,0,0,0.08); }
+  /* dark: graphite, authored, not inverted */
+  .dark { background: rgba(44,44,46,0.96); color: rgba(255,255,255,0.96); }
+  .dark .sec { color: rgba(255,255,255,0.55); } .dark .ter { color: rgba(255,255,255,0.25); }
+  .dark .row:hover { background: rgba(255,255,255,0.06); }
+  .dark .divider { background: rgba(255,255,255,0.09); }
+  .dark .btn { background: rgba(255,255,255,0.08); }
+  .dark .btn:hover { background: rgba(255,255,255,0.12); }
+
+  .header { padding: 14px 16px 10px; }
+  .h-top { display: flex; align-items: center; gap: 8px; }
+  .pulse { width: 22px; height: 14px; flex: none; }
+  .h-title { font-weight: 600; }
+  .pill {
+    margin-left: auto; font-size: 10px; line-height: 13px; font-weight: 600;
+    padding: 1.5px 8px; border-radius: 99px;
+  }
+  .pill.online  { color: #0B7B58; background: rgba(0,200,179,0.16); }
+  .dark .pill.online { color: #4CE0B3; background: rgba(0,218,195,0.18); }
+  .pill.offline { color: #B25000; background: rgba(255,141,40,0.18); }
+  .h-line { margin-top: 3px; }
+  .healthbar { height: 2px; border-radius: 1px; margin-top: 10px;
+    background: linear-gradient(90deg, #00C8B3 0%, #00C8B3 72%, rgba(255,141,40,0.9) 72%, rgba(255,141,40,0.9) 100%); }
+
+  .divider { height: 1px; }
+
+  .runs { padding: 4px 0; max-height: 340px; overflow-y: auto; }
+  .run { padding: 2px 8px; }
+  .row {
+    display: flex; align-items: center; gap: 8px; border-radius: 8px;
+    padding: 5px 8px; min-height: 24px;
+  }
+  .chev { width: 10px; font-size: 9px; flex: none; text-align: center; }
+  .dot { width: 8px; height: 8px; border-radius: 4px; flex: none; }
+  .dot.ok { background: #34C759; } .dot.warn { background: #FF8D28; }
+  .dot.err { background: #FF383C; } .dot.recover { background: #00C8B3; }
+  .dot.paused { background: #98A0AB; }
+  .run-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-id { font-size: 10px; }
+  .chip { margin-left: auto; font-size: 10px; line-height: 13px; font-weight: 600; padding: 1.5px 7px; border-radius: 99px; flex: none; }
+  .chip.warn { color: #B25000; background: rgba(255,141,40,0.16); }
+  .chip.ok   { color: #1B7A33; background: rgba(52,199,89,0.16); }
+  .dark .chip.warn { color: #FFB067; } .dark .chip.ok { color: #6FE08B; }
+  .chip.recover { color: #067A6A; background: rgba(0,200,179,0.16); }
+  .dark .chip.recover { color: #4CE0B3; }
+
+  .agents { padding: 0 0 4px 26px; }
+  .agent { display: flex; align-items: center; gap: 8px; padding: 3px 8px; border-radius: 6px; min-height: 22px; }
+  .agent .state { margin-left: auto; font-size: 11px; }
+  .btn {
+    font-size: 11px; line-height: 20px; font-weight: 500; padding: 0 10px;
+    border-radius: 10px; border: none; flex: none; color: inherit;
+  }
+  .btn.primary { background: #00C8B3; color: #06312A; font-weight: 600; }
+  .btn.primary:hover { background: #00DAC3; }
+  .btn:focus-visible { outline: 2px solid #00C8B3; outline-offset: 1px; }
+
+  .runactions { display: flex; gap: 6px; padding: 2px 8px 8px 34px; }
+
+  .footer { display: flex; align-items: center; gap: 10px; padding: 9px 16px; font-size: 11px; }
+  .footer .quit { margin-left: auto; }
+  .stale { padding: 6px 16px 10px; font-size: 11px; }
+  .stale b { font-weight: 600; }
+
+  .empty { padding: 34px 24px 38px; text-align: center; }
+  .empty .pulse-big { width: 56px; height: 32px; margin: 0 auto 12px; opacity: 0.9; }
+  .empty p { margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<!-- ============ IDEAL STATE · DARK ============ -->
+<div class="stage"><span>Ideal · dark · warning run expanded</span>
+<div class="popover dark">
+  <div class="header">
+    <div class="h-top">
+      <svg class="pulse" viewBox="0 0 44 28" fill="none"><path d="M2 18 L14 18 L17 20 L20 18 L23 18 L27 6 L31 22 L34 13 L42 13" stroke="#00DAC3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="h-title">lifeline</span>
+      <span class="pill online">online</span>
+    </div>
+    <div class="h-line sec">2 workflows tracked · 1 needs a look</div>
+    <div class="healthbar"></div>
+  </div>
+  <div class="divider"></div>
+  <div class="runs">
+    <!-- warning run, expanded -->
+    <div class="run">
+      <div class="row">
+        <span class="chev sec">▾</span>
+        <span class="dot warn"></span>
+        <span class="run-name">perch</span>
+        <span class="run-id ter">wf_795d98f2</span>
+        <span class="chip warn">warning</span>
+      </div>
+      <div class="agents">
+        <div class="agent"><span class="dot ok"></span><span>merge PH-004</span><span class="state sec">done</span></div>
+        <div class="agent"><span class="dot recover"></span><span>work PH-013</span><span class="state sec">retrying (3/30, next in 12s)</span></div>
+        <div class="agent">
+          <span class="dot err"></span><span>work PH-009</span>
+          <span class="state sec">failed</span>
+          <button class="btn primary">Retry</button>
+        </div>
+        <div class="agent"><span class="dot ok"></span><span>work PH-011</span><span class="state sec">running</span></div>
+      </div>
+      <div class="runactions">
+        <button class="btn">Retry all failed</button>
+        <button class="btn">Pause run</button>
+      </div>
+    </div>
+    <!-- healthy run, collapsed -->
+    <div class="run">
+      <div class="row">
+        <span class="chev sec">▸</span>
+        <span class="dot ok"></span>
+        <span class="run-name">finance</span>
+        <span class="run-id ter">wf_b7d92af6</span>
+        <span class="chip ok">running</span>
+      </div>
+    </div>
+  </div>
+  <div class="divider"></div>
+  <div class="footer sec">
+    <span>Updated 2s ago</span>
+    <span class="quit">Quit lifeline</span>
+  </div>
+</div>
+</div>
+
+<!-- ============ IDEAL STATE · LIGHT ============ -->
+<div class="stage"><span>Ideal · light · collapsed</span>
+<div class="popover light">
+  <div class="header">
+    <div class="h-top">
+      <svg class="pulse" viewBox="0 0 44 28" fill="none"><path d="M2 18 L14 18 L17 20 L20 18 L23 18 L27 6 L31 22 L34 13 L42 13" stroke="#00C8B3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="h-title">lifeline</span>
+      <span class="pill online">online</span>
+    </div>
+    <div class="h-line sec">2 workflows tracked · all healthy</div>
+    <div class="healthbar" style="background:#00C8B3"></div>
+  </div>
+  <div class="divider"></div>
+  <div class="runs">
+    <div class="run">
+      <div class="row">
+        <span class="chev sec">▸</span>
+        <span class="dot recover"></span>
+        <span class="run-name">perch</span>
+        <span class="run-id ter">wf_795d98f2</span>
+        <span class="chip recover">recovering</span>
+      </div>
+    </div>
+    <div class="run">
+      <div class="row">
+        <span class="chev sec">▸</span>
+        <span class="dot ok"></span>
+        <span class="run-name">finance</span>
+        <span class="run-id ter">wf_b7d92af6</span>
+        <span class="chip ok">completed</span>
+      </div>
+    </div>
+  </div>
+  <div class="divider"></div>
+  <div class="footer sec">
+    <span>Updated just now</span>
+    <span class="quit">Quit lifeline</span>
+  </div>
+</div>
+</div>
+
+<!-- ============ EMPTY STATE · DARK ============ -->
+<div class="stage"><span>Empty · dark</span>
+<div class="popover dark">
+  <div class="header">
+    <div class="h-top">
+      <svg class="pulse" viewBox="0 0 44 28" fill="none"><path d="M2 18 L14 18 L17 20 L20 18 L23 18 L27 6 L31 22 L34 13 L42 13" stroke="#00DAC3" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="h-title">lifeline</span>
+      <span class="pill online">online</span>
+    </div>
+  </div>
+  <div class="divider"></div>
+  <div class="empty">
+    <svg class="pulse-big" viewBox="0 0 44 28" fill="none"><path d="M2 18 L14 18 L17 20 L20 18 L23 18 L27 6 L31 22 L34 13 L42 13" stroke="#3D4148" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div>No workflows tracked yet</div>
+    <p class="sec">Start a workflow in Claude Code and it will appear here, watched.</p>
+  </div>
+  <div class="divider"></div>
+  <div class="footer sec">
+    <span>Updated just now</span>
+    <span class="quit">Quit lifeline</span>
+  </div>
+</div>
+</div>
+
+<!-- ============ DAEMON QUIET · DARK ============ -->
+<div class="stage"><span>Daemon quiet · dark</span>
+<div class="popover dark">
+  <div class="header">
+    <div class="h-top">
+      <svg class="pulse" viewBox="0 0 44 28" fill="none"><path d="M2 18 L42 18" stroke="#98A0AB" stroke-width="3" stroke-linecap="round"/></svg>
+      <span class="h-title">lifeline</span>
+      <span class="pill offline">quiet</span>
+    </div>
+  </div>
+  <div class="divider"></div>
+  <div class="stale sec"><b>The watcher has gone quiet.</b> Its last update was 4 minutes ago, so what's below may be stale. Run <span style="font-family:ui-monospace,Menlo">lifeline doctor</span> in a terminal to check on it.</div>
+  <div class="runs" style="opacity:0.55">
+    <div class="run">
+      <div class="row">
+        <span class="chev sec">▸</span>
+        <span class="dot warn"></span>
+        <span class="run-name">perch</span>
+        <span class="run-id ter">wf_795d98f2</span>
+        <span class="chip warn">warning</span>
+      </div>
+    </div>
+  </div>
+  <div class="divider"></div>
+  <div class="footer sec">
+    <span>Updated 4m ago</span>
+    <span class="quit">Quit lifeline</span>
+  </div>
+</div>
+</div>
+
+</body>
+</html>
