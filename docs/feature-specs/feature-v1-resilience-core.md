@@ -103,7 +103,11 @@ daemon + installer + evals.
   daemon detects the lost agent, schedules recovery, and reconciles against a git fixture.
 
 ## Out of scope (later phases, do NOT build here)
-- Control-plane MCP server (enqueue/dequeue/message-agent) and the graphical/menubar UI.
+- Control-plane graphical/menubar UI, and enqueue/dequeue/message-agent queue mutation.
+  (AMENDED 2026-08-07: a minimal MCP server DID move into v1 — status/retry/pause/resume
+  tools with rich descriptions, registered by the installer — because "the CLI's model is
+  aware of the new functionality" was an explicit v1 ask. Enqueue/templating tools remain
+  later-phase.)
 - Workflow templating.
 - The npm/`node`-install `--require` source-rewrite deep-integration path.
 - Any modification of the Claude Code binary.

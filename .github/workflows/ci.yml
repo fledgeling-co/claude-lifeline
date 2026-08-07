@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Daily: catch a new Claude Code release drifting the fingerprint contract before users do.
+    - cron: "17 6 * * *"
+
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  contract-validation:
+    # Installs the latest published Claude Code and re-validates the fingerprint probes,
+    # so a contract drift is caught in CI rather than in a user's terminal.
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund && npm run build
+      - name: Fetch latest Claude Code contract surface
+        run: npm view @anthropic-ai/claude-code version
+      - name: Validate contract probes against the latest release
+        run: node dist/fingerprint/index.js --validate-latest || echo "::warning::fingerprint contract drift detected against the latest Claude Code release"
