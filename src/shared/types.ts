@@ -3,6 +3,7 @@ import type { ErrorClass } from "./classifier.js";
 /** State of a single agent in the retry ledger. */
 export type AgentState =
   | "retrying"
+  | "stalled" // alive but produced no output / no context change for the stall window
   | "paused-offline"
   | "paused-usage-limit"
   | "paused-manual"
@@ -70,6 +71,20 @@ export interface StatusRun {
   project: string;
   state: RunState;
   agents: StatusAgent[];
+  /** Elapsed wall-clock of the run so far, ms (earliest agent activity → now). */
+  durationMs?: number | null;
+  /** Highest context-window fill across the run's agents, 0..1, or null if unknown. */
+  contextFrac?: number | null;
+  /** One-line "what is this run doing now" narrator, if derivable. */
+  note?: string | null;
+  /** Repo the run's agents worked in (from the transcript cwd). */
+  cwd?: string | null;
+  /** Terminal program hosting the run's claude session, for the reveal action. */
+  term?: string | null;
+  /** Controlling tty of the run's claude session, for the reveal action. */
+  tty?: string | null;
+  /** Last cleaned lines of the top-level claude session that launched this run. */
+  callerTail?: string[];
 }
 
 export interface StatusAgent {
@@ -80,4 +95,12 @@ export interface StatusAgent {
   maxAttempts: number;
   nextRetryAt: number | null;
   lastClass: ErrorClass | null;
+  /** Elapsed wall-clock of the agent, ms (first → last transcript timestamp). */
+  durationMs?: number | null;
+  /** Context-window fill 0..1 from the latest usage record, or null if unknown. */
+  contextFrac?: number | null;
+  /** How long the agent has been quiet, ms — set when state is "stalled". */
+  stalledForMs?: number | null;
+  /** Last few cleaned transcript lines (newest last), for the expandable log. */
+  tail?: string[];
 }

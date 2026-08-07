@@ -186,6 +186,21 @@
   /* one calm activity line under a run (the narrator). tertiary, not mono, not a log. */
   .noteline { padding: 0 8px 4px 34px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  /* the caller: the human's claude session that launched the run. A small tag + last line. */
+  .callerline {
+    display: flex; align-items: center; gap: 7px; padding: 2px 8px 4px 34px; font-size: 11px;
+    border-radius: 6px; transition: background 0.15s ease;
+  }
+  .light .callerline:hover { background: rgba(0,0,0,0.04); } .dark .callerline:hover { background: rgba(255,255,255,0.05); }
+  .caller-tag { flex: none; font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 99px; }
+  .light .caller-tag { background: rgba(0,0,0,0.07); color: rgba(0,0,0,0.5); }
+  .dark .caller-tag { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.55); }
+  .caller-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .light .caller-text { color: rgba(0,0,0,0.5); } .dark .caller-text { color: rgba(255,255,255,0.5); }
+  .caller-more { padding: 0 8px 6px 41px; font-size: 11px; }
+  .light .caller-more { color: rgba(0,0,0,0.42); } .dark .caller-more { color: rgba(255,255,255,0.42); }
+  .caller-more div { padding: 1px 0; }
+
   /* the state word carries colour only for the states that need attention */
   .t-err { color: #D9542F; } .dark .t-err { color: #FF9E7A; }
   .t-warn { color: #B4791A; } .dark .t-warn { color: #F0B44C; }
@@ -327,6 +342,7 @@ const FIXTURES = {
       { name: "perch", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: true,
         dur: "14m", ctx: 0.62, term: "Ghostty",
         note: "waiting on work PH-009 before merge",
+        caller: ["Kicked off the perch fleet: 4 agents across the review dimensions", "Watching for the verify gate before I merge"],
         agents: [
           { name: "merge PH-004", dot: "ok", state: "done", dur: "3m 20s", ctx: 0.41, tail: [
             "Rebased ai/ph-004 onto staging (2 files)",
@@ -527,6 +543,16 @@ function render() {
       if (run.note) {
         html += `<div class="noteline ter">${run.note}</div>`;
       }
+      // the caller: the top-level claude session that launched this run. Last line always
+      // shown (dim), click to see the last couple. Distinct from the run's own narrator.
+      if (run.caller && run.caller.length) {
+        html += `<div class="callerline" data-caller="${i}" title="Your Claude session that started this run">
+          <span class="caller-tag">your session</span>
+          <span class="caller-text">${run.caller[run.caller.length - 1]}</span></div>`;
+        if (run.callerOpen && run.caller.length > 1) {
+          html += `<div class="caller-more">${run.caller.slice(0, -1).map((l) => `<div>${l}</div>`).join("")}</div>`;
+        }
+      }
       if (run.expanded && run.agents.length) {
         html += `<div class="agents">`;
         run.agents.forEach((a, j) => {
@@ -574,6 +600,14 @@ function render() {
       const [ri, ai] = el.dataset.agent.split("-").map(Number);
       const a = FIXTURES[ui.state].runs[ri].agents[ai];
       a.tailOpen = !a.tailOpen; render();
+    });
+  });
+  // click the caller line -> show the last couple of lines from your claude session
+  content.querySelectorAll(".callerline[data-caller]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const run = FIXTURES[ui.state].runs[Number(el.dataset.caller)];
+      run.callerOpen = !run.callerOpen; render();
     });
   });
   // terminal reveal (mock: just flashes; the real app raises the Ghostty/Terminal tab)

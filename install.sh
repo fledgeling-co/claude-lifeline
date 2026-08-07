@@ -164,7 +164,7 @@ done
 if command -v swiftc >/dev/null 2>&1; then
   say "compiling the status window (menu-bar app)"
   mkdir -p "${LIFELINE_HOME}/bin"
-  if swiftc -O -o "${LIFELINE_HOME}/bin/lifeline-menubar" "${SRC}/menubar/lifeline-menubar.swift" 2>"${LIFELINE_HOME}/logs/menubar-build.log"; then
+  if swiftc -O -o "${LIFELINE_HOME}/bin/lifeline-menubar" "${SRC}/menubar/lifeline-menubar.swift" "${SRC}/menubar/TerminalRevealer.swift" 2>"${LIFELINE_HOME}/logs/menubar-build.log"; then
     plist="${LAUNCH_AGENTS}/com.lifeline.menubar.plist"
     render "${SRC}/install/com.lifeline.menubar.plist.tmpl" > "${plist}"
     launchctl bootout "gui/$(id -u)/com.lifeline.menubar" >/dev/null 2>&1 || true

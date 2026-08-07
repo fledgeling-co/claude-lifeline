@@ -24,17 +24,28 @@ struct StatusRun: Decodable, Identifiable {
     var project: String
     var state: String   // running | completed | completed-with-failures | warning | recovering
     var agents: [StatusAgent]
+    var durationMs: Double?
+    var contextFrac: Double?
+    var note: String?
+    var cwd: String?
+    var term: String?
+    var tty: String?
+    var callerTail: [String]?
     var id: String { runId }
 }
 
 struct StatusAgent: Decodable, Identifiable {
     var agentId: String?
     var item: String?
-    var state: String   // retrying | paused-offline | paused-usage-limit | paused-manual | failed-terminal | done
+    var state: String   // retrying | stalled | paused-* | failed-terminal | done
     var attempts: Int
     var maxAttempts: Int
     var nextRetryAt: Double?
     var lastClass: String?
+    var durationMs: Double?
+    var contextFrac: Double?
+    var stalledForMs: Double?
+    var tail: [String]?
     var id: String { agentId ?? item ?? UUID().uuidString }
 }
 
@@ -105,6 +116,9 @@ enum Vocab {
                 return "retrying (\(a.attempts)/\(a.maxAttempts), next in \(secs)s)"
             }
             return "retrying (\(a.attempts)/\(a.maxAttempts))"
+        case "stalled":
+            if let ms = a.stalledForMs { return "stalled \(short(ms))" }
+            return "stalled"
         case "paused-offline": return "paused (offline)"
         case "paused-usage-limit": return "paused (usage limit)"
         case "paused-manual": return "paused"
@@ -129,10 +143,21 @@ enum Vocab {
         switch state {
         case "failed-terminal": return .red
         case "retrying": return Palette.mint
+        case "stalled": return .orange
         case "paused-offline", "paused-usage-limit", "paused-manual": return .gray
         case "done": return .green
         default: return .green
         }
+    }
+
+    /** A compact "3m 20s" from milliseconds, for durations. */
+    static func short(_ ms: Double) -> String {
+        let s = Int(ms / 1000)
+        if s < 60 { return "\(s)s" }
+        let m = s / 60, rem = s % 60
+        if m < 60 { return rem == 0 ? "\(m)m" : "\(m)m \(rem)s" }
+        let h = m / 60
+        return "\(h)h \(m % 60)m"
     }
 }
 
@@ -153,7 +178,7 @@ func overallHealth(_ snap: StatusSnapshot?) -> Health {
         case "warning", "completed-with-failures": runH = .warning
         case "recovering": runH = .recovering
         default:
-            runH = run.agents.contains { $0.state == "failed-terminal" } ? .warning : .ok
+            runH = run.agents.contains { $0.state == "failed-terminal" || $0.state == "stalled" } ? .warning : .ok
         }
         // a run whose agents ALL failed is a real failure
         if !run.agents.isEmpty && run.agents.allSatisfy({ $0.state == "failed-terminal" }) {
@@ -174,14 +199,18 @@ struct PopoverView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
-            if model.staleSeconds != nil && model.staleSeconds! > 30 {
-                staleBanner
+            if model.coreState != .installed {
+                SetupView(model: model)
+            } else {
+                header
+                Divider()
+                if model.staleSeconds != nil && model.staleSeconds! > 30 {
+                    staleBanner
+                }
+                content
+                Divider()
+                footer
             }
-            content
-            Divider()
-            footer
         }
         .frame(
             minWidth: 360,
@@ -273,11 +302,32 @@ struct PopoverView: View {
     }
 }
 
+/// Duration + a compact context-window meter that warms as the window fills.
+struct MetaView: View {
+    var durationMs: Double?
+    var contextFrac: Double?
+    var body: some View {
+        HStack(spacing: 8) {
+            if let d = durationMs { Text(Vocab.short(d)).font(.system(size: 11)).monospacedDigit().foregroundStyle(.tertiary) }
+            if let c = contextFrac {
+                let color: Color = c >= 0.85 ? Color(red: 0.88, green: 0.38, blue: 0.24)
+                    : c >= 0.7 ? Color(red: 0.88, green: 0.64, blue: 0.24) : Color(red: 0.24, green: 0.61, blue: 0.56)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.secondary.opacity(0.22)).frame(width: 26, height: 5)
+                    Capsule().fill(color).frame(width: 26 * CGFloat(c), height: 5)
+                }
+                .help("Context window \(Int(c * 100))% full")
+            }
+        }
+    }
+}
+
 struct RunRow: View {
     let run: StatusRun
     @ObservedObject var model: Model
-    @State private var expanded = true
+    @State private var hovering = false
 
+    var expanded: Bool { model.isRunExpanded(run.runId) }
     var hasFailures: Bool { run.agents.contains { $0.state == "failed-terminal" } }
     var isPaused: Bool { run.agents.contains { $0.state == "paused-manual" } }
 
@@ -289,20 +339,57 @@ struct RunRow: View {
                 Circle().fill(Vocab.runChip(run.state).color).frame(width: 8, height: 8)
                 Text(run.project.split(separator: "-").last.map(String.init) ?? run.project)
                     .fontWeight(.semibold).lineLimit(1)
-                Text(String(run.runId.prefix(11)))
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
-                Spacer()
                 let chip = Vocab.runChip(run.state)
                 Text(chip.text)
                     .font(.system(size: 10, weight: .semibold))
                     .padding(.horizontal, 7).padding(.vertical, 1.5)
-                    .background(chip.color.opacity(0.16))
-                    .foregroundStyle(chip.color)
+                    .background(chip.color.opacity(0.16)).foregroundStyle(chip.color)
                     .clipShape(Capsule())
+                Spacer()
+                if run.tty != nil || run.cwd != nil {
+                    Button { model.revealTerminal(run) } label: {
+                        Image(systemName: "macwindow").font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .opacity(hovering ? 0.7 : 0)
+                    .help("Open the terminal running this workflow")
+                }
+                MetaView(durationMs: run.durationMs ?? nil, contextFrac: run.contextFrac ?? nil)
             }
             .padding(.vertical, 5).padding(.horizontal, 8)
             .contentShape(Rectangle())
-            .onTapGesture { expanded.toggle() }
+            .onHover { hovering = $0 }
+            .onTapGesture { model.toggleRun(run.runId) }
+
+            if let note = run.note, !note.isEmpty {
+                Text(note).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(1)
+                    .padding(.leading, 34).padding(.trailing, 8).padding(.bottom, 3)
+            }
+
+            // The caller: the human's claude session that launched this run. Last line always
+            // shown; tap to see the last couple. Distinct from the run's own narrator.
+            if let caller = run.callerTail, !caller.isEmpty {
+                let showAll = model.expandedAgents.contains("caller:" + run.runId)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 7) {
+                        Text("your session").font(.system(size: 9, weight: .semibold))
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Color.secondary.opacity(0.15)).clipShape(Capsule())
+                            .foregroundStyle(.secondary)
+                        Text(caller.last ?? "").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    if showAll {
+                        ForEach(caller.dropLast(), id: \.self) { l in
+                            Text(l).font(.system(size: 11)).foregroundStyle(.tertiary).lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(.leading, 34).padding(.trailing, 8).padding(.bottom, 4)
+                .contentShape(Rectangle())
+                .onTapGesture { if caller.count > 1 { model.toggleAgent("caller:" + run.runId) } }
+            }
 
             if expanded {
                 VStack(alignment: .leading, spacing: 0) {
@@ -314,7 +401,7 @@ struct RunRow: View {
 
                 HStack(spacing: 6) {
                     if hasFailures {
-                        SmallButton(title: "Retry all failed", prominent: false) {
+                        SmallButton(title: "Retry failed agents", prominent: false) {
                             model.send(kind: "retry", runId: run.runId, agentId: nil)
                         }
                     }
@@ -339,24 +426,127 @@ struct AgentRow: View {
     let runId: String
     @ObservedObject var model: Model
 
+    var stateColor: Color {
+        switch agent.state {
+        case "failed-terminal": return Color(red: 0.85, green: 0.33, blue: 0.18)
+        case "stalled": return .orange
+        case "retrying": return Palette.mint
+        default: return .secondary
+        }
+    }
+    var isOpen: Bool { agent.agentId.map { model.expandedAgents.contains($0) } ?? false }
+
     var body: some View {
-        HStack(spacing: 8) {
-            Circle().fill(Vocab.agentDot(agent.state)).frame(width: 8, height: 8)
-            Text(agent.item ?? String((agent.agentId ?? "agent").prefix(12))).lineLimit(1)
-            Spacer()
-            Text(Vocab.agentLabel(agent, now: model.now))
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            if agent.state == "failed-terminal" {
-                SmallButton(title: "Retry", prominent: true) {
-                    model.send(kind: "retry", runId: runId, agentId: agent.agentId)
-                }
-            } else if agent.state == "paused-manual" {
-                SmallButton(title: "Resume", prominent: false) {
-                    model.send(kind: "resume", runId: runId, agentId: agent.agentId)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Circle().fill(Vocab.agentDot(agent.state)).frame(width: 8, height: 8)
+                Text(agent.item ?? String((agent.agentId ?? "agent").prefix(12))).lineLimit(1)
+                Text(Vocab.agentLabel(agent, now: model.now)).font(.system(size: 11)).foregroundStyle(stateColor)
+                Spacer()
+                MetaView(durationMs: agent.durationMs ?? nil, contextFrac: agent.contextFrac ?? nil)
+                if agent.state == "failed-terminal" || agent.state == "stalled" {
+                    SmallButton(title: "Retry", prominent: true) {
+                        model.send(kind: "retry", runId: runId, agentId: agent.agentId)
+                    }
+                } else if agent.state == "paused-manual" {
+                    SmallButton(title: "Resume", prominent: false) {
+                        model.send(kind: "resume", runId: runId, agentId: agent.agentId)
+                    }
                 }
             }
+            .padding(.vertical, 3).padding(.horizontal, 8)
+            .contentShape(Rectangle())
+            .onTapGesture { if let id = agent.agentId { model.toggleAgent(id) } }
+
+            if isOpen, let tail = agent.tail, !tail.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(Array(tail.enumerated()), id: \.offset) { _, line in
+                        Text(line).font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(line.range(of: "API Error", options: .caseInsensitive) != nil
+                                ? Color(red: 0.85, green: 0.33, blue: 0.18) : .secondary)
+                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.black.opacity(0.22)).clipShape(RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, 8).padding(.bottom, 4)
+            }
         }
-        .padding(.vertical, 3).padding(.horizontal, 8)
+    }
+}
+
+/// First-run consent + install narration. Copy from design/menubar/app-copy.md (Luke's voice).
+struct SetupView: View {
+    @ObservedObject var model: Model
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                PulseGlyph(color: Color.secondary.opacity(0.6), flat: model.coreState != .installing)
+                    .frame(width: 22, height: 14)
+                Text("lifeline").fontWeight(.semibold)
+                Spacer()
+                Text("not set up").font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 8).padding(.vertical, 1.5)
+                    .background(Color.orange.opacity(0.18)).foregroundStyle(.orange).clipShape(Capsule())
+            }
+            .padding(EdgeInsets(top: 14, leading: 16, bottom: 12, trailing: 16))
+            Divider()
+
+            if model.coreState == .installing {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(model.installProgress >= 1 ? "Done" : "Setting up…").fontWeight(.semibold)
+                    Text(model.installStep).font(.system(size: 12)).foregroundStyle(.secondary)
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.secondary.opacity(0.2)).frame(height: 3)
+                            Capsule().fill(Palette.mint).frame(width: geo.size.width * model.installProgress, height: 3)
+                        }
+                    }.frame(height: 3)
+                }
+                .padding(16)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("lifeline isn't set up yet").font(.system(size: 14, weight: .semibold))
+                    Text("It sits next to Claude Code and brings back the workflow agents it quietly drops. Setting it up adds three background helpers that:")
+                        .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    ForEach([
+                        "retry rate limits, overloads and dropped connections",
+                        "bring back agents that fall over or stall, and wait out usage caps",
+                        "re-check compatibility whenever Claude Code updates",
+                    ], id: \.self) { line in
+                        HStack(alignment: .top, spacing: 8) {
+                            Circle().fill(Palette.mint).frame(width: 6, height: 6).padding(.top, 5)
+                            Text(line).font(.system(size: 12))
+                        }
+                    }
+                    if model.learnOpen {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Adds three background helpers (a gateway, a watcher, a version check).")
+                            Text("Points your claude command through the gateway; claude stays the command.")
+                            Text("Never modifies Anthropic's app.")
+                            Text("Reversible: one command removes everything.")
+                        }
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.black.opacity(0.2)).clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    HStack(spacing: 8) {
+                        Button("Set up lifeline") { model.runInstall() }.buttonStyle(.borderedProminent).tint(Palette.mint)
+                        Button(model.learnOpen ? "Hide details" : "What it changes") { model.learnOpen.toggle() }.buttonStyle(.bordered)
+                    }.padding(.top, 4)
+                }
+                .padding(16)
+            }
+            Divider()
+            HStack {
+                Text(model.coreState == .installing ? "About a minute, and reversible any time." : "Nothing happens until you say so.")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Quit lifeline") { NSApp.terminate(nil) }.buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+            .font(.system(size: 11)).padding(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
+        }
     }
 }
 
@@ -406,6 +596,83 @@ final class Model: ObservableObject {
     @Published var snapshot: StatusSnapshot?
     @Published var staleSeconds: TimeInterval?
     @Published var now = Date()
+    @Published var expandedAgents: Set<String> = []
+    /// Runs the user has collapsed. Persisted here (not local @State) so a 1.5s snapshot
+    /// refresh never springs a collapsed run back open.
+    @Published var collapsedRuns: Set<String> = []
+    @Published var coreState: CoreState = .installed
+    @Published var installStep: String = ""
+    @Published var installProgress: Double = 0
+    @Published var learnOpen = false
+
+    enum CoreState: Equatable { case installed, notInstalled, installing }
+
+    /// The core is present when its config exists and the daemon is (recently) writing status.
+    func detectCore() {
+        let home = Lifeline.home
+        let hasConfig = FileManager.default.fileExists(atPath: home.appendingPathComponent("config.json").path)
+        let daemonFresh = (staleSeconds ?? .infinity) < 120
+        if coreState == .installing { return } // don't fight an in-progress install
+        coreState = (hasConfig || daemonFresh) ? .installed : .notInstalled
+    }
+
+    /// Run the bundled/known installer, narrating progress. The core genuinely being required
+    /// is why this is offered on launch; consent (the button) is why nothing runs unasked.
+    func runInstall() {
+        coreState = .installing
+        installProgress = 0.08
+        installStep = "Setting up…"
+        let steps = [
+            (0.22, "Starting the connection helper"),
+            (0.46, "Starting the workflow watcher"),
+            (0.70, "Routing claude through the helper (claude stays your command)"),
+            (0.92, "Recording a compatibility fingerprint of your Claude Code"),
+        ]
+        // Drive the installer; stream a coarse narration. The real work is install.sh.
+        let script = Self.installerPath()
+        DispatchQueue.global().async {
+            for (p, s) in steps {
+                DispatchQueue.main.async { self.installProgress = p; self.installStep = s }
+                Thread.sleep(forTimeInterval: 0.9)
+            }
+            var ok = false
+            if let script {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+                proc.arguments = [script]
+                proc.standardOutput = Pipe(); proc.standardError = Pipe()
+                do { try proc.run(); proc.waitUntilExit(); ok = proc.terminationStatus == 0 } catch { ok = false }
+            }
+            DispatchQueue.main.async {
+                self.installProgress = 1
+                self.installStep = ok ? "Set up. lifeline's watching." : "Set up couldn't finish. See a terminal."
+                self.detectCore()
+                if ok { self.coreState = .installed }
+            }
+        }
+    }
+
+    /// install.sh next to the app bundle (standalone), or the known checkout, or nil.
+    static func installerPath() -> String? {
+        let candidates = [
+            Bundle.main.url(forResource: "install", withExtension: "sh")?.path,
+            Lifeline.home.appendingPathComponent("app/install.sh").path,
+        ].compactMap { $0 }
+        return candidates.first { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    func toggleAgent(_ id: String) {
+        if expandedAgents.contains(id) { expandedAgents.remove(id) } else { expandedAgents.insert(id) }
+    }
+    func toggleRun(_ id: String) {
+        if collapsedRuns.contains(id) { collapsedRuns.remove(id) } else { collapsedRuns.insert(id) }
+    }
+    func isRunExpanded(_ id: String) -> Bool { !collapsedRuns.contains(id) }
+
+    /// Best-effort: raise the terminal window/tab running this workflow's claude session.
+    func revealTerminal(_ run: StatusRun) {
+        TerminalRevealer.reveal(tty: run.tty, cwd: run.cwd, term: run.term)
+    }
 
     var daemonQuiet: Bool { (staleSeconds ?? .infinity) > 30 }
     var health: Health { overallHealth(snapshot) }
@@ -449,6 +716,7 @@ final class Model: ObservableObject {
         snapshot = snap
         staleSeconds = age
         now = Date()
+        detectCore()
     }
 
     func send(kind: String, runId: String, agentId: String?) {
@@ -568,7 +836,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
 // MARK: - main
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-app.run()
+@main
+enum LifelineMenubarApp {
+    static func main() {
+        let app = NSApplication.shared
+        let delegate = AppDelegate()
+        app.delegate = delegate
+        objc_setAssociatedObject(app, "lifelineDelegate", delegate, .OBJC_ASSOCIATION_RETAIN)
+        app.run()
+    }
+}

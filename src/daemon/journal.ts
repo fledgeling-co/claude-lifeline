@@ -79,6 +79,39 @@ export interface RunScan {
   /** Prompt-chain keys with a journaled `result` — the only evidence an agent truly finished. */
   resultKeys: string[];
   lost: LostAgent[];
+  /** Agents alive but quiet past the stall window — recovered by a scheduled nudge. */
+  stalled: StalledAgent[];
+  /** Per-agent telemetry for the status view (durations, context fill, tail), all agents. */
+  agents: AgentTelemetry[];
+  /** Earliest transcript timestamp across the run, ms — the run's start for its duration. */
+  startedAtMs: number | null;
+  /** Last cleaned lines of the top-level claude session that launched this run. */
+  callerTail: string[];
+}
+
+export interface StalledAgent {
+  key: string;
+  agentId: string;
+  item: string | null;
+  quietForMs: number;
+  transcriptFile: string;
+  mtimeMs: number;
+}
+
+/** Everything the status view needs about one agent, independent of the ledger. */
+export interface AgentTelemetry {
+  agentId: string;
+  key: string | null;
+  item: string | null;
+  /** "done" | "lost" | "stalled" | "live" — the scan's view before the ledger overrides it. */
+  kind: "done" | "lost" | "stalled" | "live";
+  firstTsMs: number | null;
+  lastTsMs: number | null;
+  durationMs: number | null;
+  /** Context-window fill 0..1 from the latest usage record, or null when none seen. */
+  contextFrac: number | null;
+  quietForMs: number | null;
+  tail: string[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -206,6 +239,106 @@ export function parseCwd(text: string): string | null {
   return null;
 }
 
+/** A transcript line's ISO `timestamp`, in ms, or null. */
+function lineTsMs(obj: Record<string, unknown>): number | null {
+  const ts = obj["timestamp"];
+  if (typeof ts !== "string") return null;
+  const ms = Date.parse(ts);
+  return Number.isNaN(ms) ? null : ms;
+}
+
+/**
+ * Context-window fill from an assistant message's usage record. Claude Code writes the full
+ * usage on every assistant turn (`input_tokens + cache_creation_input_tokens +
+ * cache_read_input_tokens` is the prompt actually sent, i.e. how full the window is). Divided
+ * by the model's context limit; the 1m-context models are detected from the model id.
+ */
+export function contextFracFromUsage(
+  usage: Record<string, unknown>,
+  model: string,
+  defaultLimit: number,
+): number | null {
+  const n = (k: string): number => (typeof usage[k] === "number" ? (usage[k] as number) : 0);
+  const used = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
+  if (used <= 0) return null;
+  const limit = /\[1m\]|-1m\b|1m\b/i.test(model) ? 1_000_000 : defaultLimit;
+  return Math.min(1, used / limit);
+}
+
+/** A short, human line from an assistant/user transcript entry, for the tail log. */
+function tailLineOf(obj: Record<string, unknown>): string | null {
+  const message = isRecord(obj["message"]) ? obj["message"] : null;
+  const text = messageText(message).trim();
+  if (!text) return null;
+  // First non-empty line, collapsed — the tail is a glance, not the full turn.
+  const first = text.split("\n").find((l) => l.trim().length > 0) ?? text;
+  return first.replace(/\s+/g, " ").slice(0, 160);
+}
+
+/**
+ * Parse a transcript's timing, context fill and tail from its head+tail slices.
+ * `defaultLimit` is the config context-window size; the model id (read from the tail) can
+ * override it for 1m-context models.
+ */
+export function readTelemetry(
+  headText: string,
+  tailText: string,
+  defaultLimit: number,
+  tailCount = 4,
+): { firstTsMs: number | null; lastTsMs: number | null; contextFrac: number | null; tail: string[] } {
+  let firstTsMs: number | null = null;
+  for (const line of lastLines(headText, 200)) {
+    try {
+      const obj = JSON.parse(line);
+      if (isRecord(obj)) {
+        const ts = lineTsMs(obj);
+        if (ts !== null) {
+          firstTsMs = ts;
+          break;
+        }
+      }
+    } catch {
+      /* skip */
+    }
+  }
+
+  let lastTsMs: number | null = null;
+  let contextFrac: number | null = null;
+  let model = "";
+  const tailAll: string[] = [];
+  for (const line of lastLines(tailText, 200)) {
+    let obj: unknown;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(obj)) continue;
+    const ts = lineTsMs(obj);
+    if (ts !== null) lastTsMs = ts;
+    const message = isRecord(obj["message"]) ? obj["message"] : null;
+    if (message) {
+      if (typeof message["model"] === "string" && message["model"] !== "<synthetic>") {
+        model = message["model"];
+      }
+      const usage = isRecord(message["usage"]) ? message["usage"] : null;
+      if (usage) {
+        const frac = contextFracFromUsage(usage, model, defaultLimit);
+        if (frac !== null) contextFrac = frac;
+      }
+    }
+    const tl = tailLineOf(obj);
+    if (tl) tailAll.push(tl);
+  }
+
+  return {
+    firstTsMs,
+    lastTsMs,
+    contextFrac,
+    tail: tailAll.slice(Math.max(0, tailAll.length - tailCount)),
+  };
+}
+
 /**
  * The lost-agent predicate (feature spec §B): an API-error tail, no journaled result for the
  * agent's key, and a transcript that has been quiet longer than the live window. All three
@@ -307,6 +440,10 @@ interface RunSnapshot {
 export interface ScanOptions {
   now: number;
   liveWindowMs: number;
+  /** No output/context change for this long → stalled. Defaults to no stall detection. */
+  stallWindowMs?: number;
+  /** Model context-window size for the fill computation. Defaults to 200k. */
+  contextLimitTokens?: number;
 }
 
 /**
@@ -336,57 +473,94 @@ export function scanRunDir(runDir: string, opts: ScanOptions): RunScan | null {
   }
 
   const lost: LostAgent[] = [];
+  const stalled: StalledAgent[] = [];
+  const agents: AgentTelemetry[] = [];
   let liveAgents = 0;
   let completedAgents = 0;
   let cwd: string | null = null;
+  let startedAtMs: number | null = null;
+  const limit = opts.contextLimitTokens ?? 200_000;
 
   for (const fileName of transcripts) {
     const agentId = fileName.slice("agent-".length, -".jsonl".length);
-    const key = index.keyByAgent.get(agentId);
-    // Without a `started` line we have no prompt-chain key, so there is nothing to key the
-    // ledger on and no way to resume it — skip rather than guess.
-    if (!key) continue;
-
-    const hasResult = index.resultKeys.has(key);
-    if (hasResult) {
-      completedAgents += 1;
-      continue;
-    }
+    const key = index.keyByAgent.get(agentId) ?? null;
 
     const file = join(runDir, fileName);
     const tail = readSlice(file, TAIL_BYTES, "tail");
+    const head = readSlice(file, HEAD_BYTES, "head");
     if (!tail) continue;
     if (!cwd) cwd = parseCwd(tail.text);
 
-    const sig = apiErrorFromTail(tail.text);
-    if (
-      !isLost({
-        hasApiErrorTail: sig !== null,
-        hasResult,
-        mtimeMs: tail.mtimeMs,
-        now: opts.now,
-        liveWindowMs: opts.liveWindowMs,
-      })
-    ) {
-      liveAgents += 1;
-      continue;
+    const tele = readTelemetry(head?.text ?? tail.text, tail.text, limit);
+    if (tele.firstTsMs !== null) {
+      startedAtMs = startedAtMs === null ? tele.firstTsMs : Math.min(startedAtMs, tele.firstTsMs);
     }
-    if (!sig) continue; // unreachable given isLost, but keeps the narrowing honest
+    const quietForMs = tele.lastTsMs !== null ? Math.max(0, opts.now - tele.lastTsMs) : opts.now - tail.mtimeMs;
+    const durationMs = tele.firstTsMs !== null && tele.lastTsMs !== null ? tele.lastTsMs - tele.firstTsMs : null;
 
-    const head = readSlice(file, HEAD_BYTES, "head");
-    const label = labels.get(agentId) ?? null;
-    const item =
-      (head ? parseItemId(head.text) : null) ??
-      (label ? (parseItemId(label) ?? label) : null);
+    // A transcript with no `started` line has no ledger key; still surface its telemetry.
+    const hasResult = key !== null && index.resultKeys.has(key);
+    let kind: AgentTelemetry["kind"];
 
-    lost.push({
-      key,
+    if (hasResult) {
+      completedAgents += 1;
+      kind = "done";
+    } else {
+      const sig = apiErrorFromTail(tail.text);
+      const lostNow =
+        key !== null &&
+        isLost({
+          hasApiErrorTail: sig !== null,
+          hasResult,
+          mtimeMs: tail.mtimeMs,
+          now: opts.now,
+          liveWindowMs: opts.liveWindowMs,
+        });
+      if (lostNow && sig) {
+        const label = labels.get(agentId) ?? null;
+        const item =
+          (head ? parseItemId(head.text) : null) ?? (label ? (parseItemId(label) ?? label) : null);
+        lost.push({
+          key: key!,
+          agentId,
+          item,
+          errorText: sig.errorText,
+          classification: classify({ status: sig.status, message: sig.errorText }),
+          transcriptFile: file,
+          mtimeMs: tail.mtimeMs,
+        });
+        kind = "lost";
+      } else if (
+        key !== null &&
+        opts.stallWindowMs !== undefined &&
+        sig === null &&
+        quietForMs > opts.stallWindowMs
+      ) {
+        // Alive (no error tail, not yet past the live window as a loss) but silent past the
+        // stall window: nothing new written and, by the last usage record, no context change.
+        const label = labels.get(agentId) ?? null;
+        const item =
+          (head ? parseItemId(head.text) : null) ?? (label ? (parseItemId(label) ?? label) : null);
+        stalled.push({ key, agentId, item, quietForMs, transcriptFile: file, mtimeMs: tail.mtimeMs });
+        kind = "stalled";
+      } else {
+        liveAgents += 1;
+        kind = "live";
+      }
+    }
+
+    const label2 = labels.get(agentId) ?? null;
+    agents.push({
       agentId,
-      item,
-      errorText: sig.errorText,
-      classification: classify({ status: sig.status, message: sig.errorText }),
-      transcriptFile: file,
-      mtimeMs: tail.mtimeMs,
+      key,
+      item: (head ? parseItemId(head.text) : null) ?? (label2 ? (parseItemId(label2) ?? label2) : null),
+      kind,
+      firstTsMs: tele.firstTsMs,
+      lastTsMs: tele.lastTsMs,
+      durationMs,
+      contextFrac: tele.contextFrac,
+      quietForMs: kind === "stalled" ? quietForMs : null,
+      tail: tele.tail,
     });
   }
 
@@ -402,7 +576,35 @@ export function scanRunDir(runDir: string, opts: ScanOptions): RunScan | null {
     completedAgents,
     resultKeys: [...index.resultKeys],
     lost,
+    stalled,
+    agents,
+    startedAtMs,
+    callerTail: readCallerTail(parts.sessionDir, 2),
   };
+}
+
+/**
+ * The last cleaned lines of the top-level claude session that launched this run — the
+ * "caller". Its transcript sits at `<project>/<sessionId>.jsonl`, sibling to the session
+ * directory. Best-effort: returns [] when it can't be read.
+ */
+export function readCallerTail(sessionDir: string, count: number): string[] {
+  const file = `${sessionDir}.jsonl`;
+  const slice = readSlice(file, TAIL_BYTES, "tail");
+  if (!slice) return [];
+  const out: string[] = [];
+  for (const line of lastLines(slice.text, 60)) {
+    let obj: unknown;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(obj)) continue;
+    const tl = tailLineOf(obj);
+    if (tl) out.push(tl);
+  }
+  return out.slice(Math.max(0, out.length - count));
 }
 
 /** `workflowProgress` carries a human label per agent — a fallback item id. */

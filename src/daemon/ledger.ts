@@ -21,6 +21,7 @@ import type { AgentState, LedgerEntry, RunLedger } from "../shared/types.js";
 /** States from which the daemon still intends to act on an entry. */
 const ACTIVE_STATES: ReadonlySet<AgentState> = new Set<AgentState>([
   "retrying",
+  "stalled",
   "paused-offline",
   "paused-usage-limit",
   "paused-manual",
@@ -110,6 +111,10 @@ export function stateForClass(cls: ErrorClass, exhausted: boolean): AgentState {
     case "OVERLOADED":
     case "CONN":
       return "retrying";
+    case "STALL":
+      // Alive but produced nothing for the stall window: shown as "stalled", recovered by
+      // a scheduled relaunch (a nudge) like any retryable loss.
+      return "stalled";
     case "USAGE_LIMIT":
       // A scheduled park, not a hot loop — the user's proxy rotates accounts with different
       // resets, so we retry on a schedule rather than hard-sleeping to one parsed reset.

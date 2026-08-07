@@ -72,9 +72,11 @@ the graphical face of the existing seams; it adds NO new state or logic of its o
    - Installer lint: bash -n; plist template placeholders all substituted.
    Plus a build smoke: `swiftc -typecheck` of the app in CI (macos runner) and locally.
 
-## v2 additions (designed this iteration; mock is the source of truth)
+## v2 additions (BUILT this iteration)
 Design ref: `design/menubar/mock.html` (interactive) + `design/menubar/app-copy.md` (all UI
 strings, written in Luke's voice, lint-clean — the app and mock both use these verbatim).
+Implemented in the daemon (durations/context/stall/tail/caller from the real transcript
+format), the Swift app, the wrapper, and the installer; covered by evals.
 
 - **Per-row duration + context-window meter.** Each agent and run row shows its elapsed
   duration and a compact context-window-usage meter that warms (teal → amber → red) as
