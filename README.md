@@ -100,6 +100,21 @@ flowchart LR
 
 Your command is still just `claude`. lifeline is doing its job in the background while you carry on exactly as before.
 
+## The status window
+
+There's now a small menu-bar app, a pulse in your menu bar. Click it and you see everything you're running at a glance, without going near the terminal.
+
+Runs are grouped by **project**, with the **workflow** name underneath, and each one shows how many agents are running and how many are still waiting to start. Open a run and you get the detail:
+
+- each agent's state: **running, retrying, stalled, failed or done**
+- how long it's been going, and how full its **context window** is (the real token count)
+- the run's latest line, and the line from your own Claude session that kicked it off
+- a **Retry** on anything failed or stalled, and **pause** or **resume** for the whole run
+
+Runs that have just finished go grey and drop to the bottom, then clear themselves after an hour, so the list stays about what's live. If you'd rather keep it open, drag it off the menu bar and it becomes its own resizable window. It works with VoiceOver and follows your system text-size setting.
+
+The one-line install sets it up; it builds the app for you if you've got Apple's command-line tools, and everything else still works if you haven't. If you'd sooner not build anything, grab the notarised app from the [Releases](https://github.com/fledgeling-co/claude-lifeline/releases) page and drop it in Applications.
+
 ## How it keeps working when Claude Code updates
 
 Claude Code updates itself roughly every day. Because lifeline never edits that app, an update can't break it the way editing it would.
@@ -119,6 +134,9 @@ curl -fsSL https://raw.githubusercontent.com/fledgeling-co/claude-lifeline/main/
 
 That sets everything up, points Claude Code through lifeline, and gets out of your way. Your command stays `claude`.
 
+> [!NOTE]
+> If you already had Claude Code open when you installed, restart those sessions so they start routing through lifeline. Any you open from now on already do.
+
 **Check it's working:**
 
 ```bash
@@ -131,6 +149,9 @@ lifeline doctor    # a quick health check of lifeline itself
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fledgeling-co/claude-lifeline/main/uninstall.sh | bash
 ```
+
+> [!NOTE]
+> Quitting the app just closes the status window; lifeline and the `claude` patch keep running in the background. To actually remove it, use **Uninstall lifeline** from the app's `···` menu, or run the uninstall line above. Quitting and uninstalling are different on purpose.
 
 > [!WARNING]
 > If you set an `ANTHROPIC_API_KEY` directly in your shell, Claude Code talks straight to the internet and skips past lifeline, so it can't help on that path. `lifeline doctor` will tell you if that's happening.
@@ -148,7 +169,7 @@ lifeline is macOS-focused for now. The core, the part that stops your work quiet
 - [x] Reusable workflow templates, plus mining your history for them
 - [x] The daily self-check against new Claude Code releases
 - [x] One-line install and one-line uninstall
-- [ ] A status window: a small menu-bar app showing your runs and agents live, with clickable retry, pause and resume, so you're not reading it from the terminal
+- [x] A status window: a menu-bar app showing your runs and agents live, with click-to-retry, pause and resume, so you're not reading it from the terminal
 - [ ] Beyond macOS
 
 I'd rather ship the thing that fixes the actual problem and be straight about what's still coming than dress it up.
