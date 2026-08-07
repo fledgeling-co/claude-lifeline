@@ -205,16 +205,22 @@ orchestrator retries. lifeline ships one:
   daemon detects, relaunches, and reconciles against git.
 
 ## 7. Phased delivery (feeds /ship-feature)
-- **Phase 0 — feasibility spike (gate):** confirm CC honors a local `ANTHROPIC_BASE_URL` end to
-  end for workflow agents; confirm the wrapper repoint + launchd watcher; confirm journal
-  contract fingerprints are stable across 2.1.221→224. If a seam is blocked, adjust before build.
-- **Phase 1 — core resilience (v1, the /ship-feature deliverable):** Seam A gateway (retry +
-  connectivity signal) + Seam B daemon (ledger, silent-loss detection, auto-retry cap 30,
-  usage-limit pause/scheduled-retry, resume-correctness) + fail-closed fingerprint + one-command
-  installer + eval harness. This alone kills the top-3 forensic failure modes.
-- **Phase 2 — control plane:** MCP server (enqueue/dequeue/pause/resume/retry/message) + `lifeline
-  status` TUI + red-✗→warning reframe.
-- **Phase 3 — templating + menubar + npm deep-integration path.**
+- **Phase 0 — feasibility spike (gate):** DONE. Confirmed CC honours a local `ANTHROPIC_BASE_URL`
+  (chaining the user's 8858 proxy as upstream), the wrapper repoint + launchd agents, and stable
+  contract fingerprints across 2.1.221→224.
+- **Phase 1 — core resilience (v1):** DONE, merged. Seam A gateway + Seam B daemon + fail-closed
+  fingerprint + one-command installer + eval harness. Live-installed on the author's machine.
+- **Phase 2 — control plane:** DONE, merged. MCP server (status/retry/pause/resume + enqueue/
+  dequeue/queue_list) and `lifeline` CLI. `lifeline status` reframing lives in the CLI renderer.
+  (The graphical/menubar UI remains future.)
+- **Phase 3 — templating:** DONE, merged. Schema inference, template store (save/list/run), miner
+  over `~/.claude/projects`, drain-workflow generation, CLI + MCP surfaces.
+- **Field-hardening (post-install):** replaced the daemon's recursive chokidar watch (EMFILE against
+  a 12,652-project tree under launchd's fd ceiling) with mtime-gated tick discovery; raised the
+  daemon plist fd limit. This is the class of failure the project exists to remove — fixed in the
+  project itself.
+- **Future:** graphical/menubar status UI; the npm/`node`-install `--require` source-rewrite deep
+  integration for in-TUI recolouring.
 
 ## 8. Stack
 Node 22 / TypeScript (matches CC's runtime; SDK-compat mocks are Node-native). `undici` for the

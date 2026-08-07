@@ -35,8 +35,8 @@ Backoff-free, retry-free, silent. That's the gap lifeline fills.
 - **A failed agent while its siblings are still working shows as a warning, not an error.** The run only goes red when the whole thing actually fails. One dropped agent out of twelve shouldn't look like a house fire.
 - **Pause a single agent, or a whole workflow** (which pauses all its subagents). Manually, or automatically.
 - **Connectivity-aware auto-pause.** Network drops, the run pauses instead of burning through retries. Network comes back, agents resume on jittered timing so they don't all stampede the API at once.
-- **Live queue changes.** Enqueue new work, drop pending items, or message a specific agent as new work turns up, without tearing the whole workflow down and rebuilding it.
-- **Templating.** The workflows you run over and over get saved as reusable, parameterised templates and re-run on demand.
+- **Live queue changes.** Enqueue new work or drop pending items in a mailbox a running drain workflow feeds from, so new work joins without tearing the whole workflow down and rebuilding it.
+- **Templating.** Save a workflow script as a reusable, parameterised template (the args become a schema with defaults), and mine your past runs for the workflows you keep rebuilding.
 - **The CLI's own model knows about all of this.** The new capabilities are exposed through the tool descriptions, so Claude knows it can pause a run, resume it, add work, and reach for a template.
 - **A version check that fails closed.** lifeline fingerprints the CLI's stable contracts. When Claude Code auto-updates, a background watcher re-checks compatibility and tells you if a new patch is needed. It won't mis-apply against a version it doesn't recognise; it says so and stays out of the way.
 
