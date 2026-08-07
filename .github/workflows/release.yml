@@ -11,6 +11,11 @@ permissions:
 jobs:
   release:
     runs-on: macos-latest
+    # Mapped to job-level env so step `if:` conditions can gate on it. The `secrets`
+    # context is not allowed inside an `if:` expression (only `env` is), and using it
+    # there fails the whole run at startup with no job and no log.
+    env:
+      MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,9 +40,8 @@ jobs:
       # OR an Apple ID app password:
       #   APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD
       - name: Import Developer ID certificate
-        if: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+        if: ${{ env.MACOS_CERT_P12_BASE64 != '' }}
         env:
-          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
         run: |
           set -euo pipefail
