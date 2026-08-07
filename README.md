@@ -148,7 +148,7 @@ lifeline is macOS-focused for now. The core, the part that stops your work quiet
 - [x] Reusable workflow templates, plus mining your history for them
 - [x] The daily self-check against new Claude Code releases
 - [x] One-line install and one-line uninstall
-- [ ] A proper status window
+- [ ] A status window: a small menu-bar app showing your runs and agents live, with clickable retry, pause and resume, so you're not reading it from the terminal
 - [ ] Beyond macOS
 
 I'd rather ship the thing that fixes the actual problem and be straight about what's still coming than dress it up.
