@@ -40,6 +40,13 @@ the graphical face of the existing seams; it adds NO new state or logic of its o
    - Empty state: "No workflows tracked yet" with one plain sentence.
 3. **Live updates**: poll status.json mtime (1–2s) + reload on popover open. Countdown
    ("next in Ns") ticks locally between polls.
+3b. **Tear-off window**: dragging the popover away from the menu bar detaches it into a
+   real, resizable macOS window with the system's own detach animation — the native
+   NSPopover detach mechanism (`popoverShouldDetach` + `detachableWindow(for:)`), never a
+   custom drag reimplementation. The detached window: titled "lifeline", closable +
+   resizable, min 360×420, shares the same live model (both surfaces stay current), and
+   the content adapts to the wider/taller layout (mock stages 5–6). Closing it returns
+   the app to popover behaviour on next click.
 4. **Installer integration**: `install.sh` compiles the app when `swiftc` exists,
    installs the launchd agent, and reports; uninstall (both scripts) removes agent +
    binary. Idempotent re-install recompiles.
@@ -75,3 +82,5 @@ the graphical face of the existing seams; it adds NO new state or logic of its o
 8. All existing evals stay green; new contract evals green in the same suite.
 9. `lifeline doctor` gains a menubar row: ok when the agent is loaded, plain note when
    skipped (no swiftc), never a hard failure.
+10. Dragging the popover detaches it into a titled, resizable window (system detach
+   animation); the window keeps updating live; closing it restores popover behaviour.

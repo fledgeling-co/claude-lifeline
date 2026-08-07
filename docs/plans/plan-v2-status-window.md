@@ -23,6 +23,12 @@ The app is a THIN VIEW over existing seams. Zero daemon/gateway changes.
      states rendered dimly rather than crashing (forward compatibility).
    - `.accessory` activation policy (no Dock icon). Esc closes the popover (NSPopover
      default). Countdown text derives from nextRetryAt vs now, ticking locally.
+   - **Tear-off**: NSPopoverDelegate `popoverShouldDetach -> true` and
+     `detachableWindow(for:)` returning a titled+closable+resizable NSWindow (min
+     360×420) hosting a second NSHostingController over the SAME Model — the system
+     animates the detach; both surfaces poll-update; closing the window reverts to
+     popover behaviour. PopoverView takes an `inWindow` flag so the layout goes
+     flexible-width in window mode (design ref: mock stages 5–6).
 2. `install/com.lifeline.menubar.plist.tmpl` — launchd agent (RunAtLoad, KeepAlive).
 3. `install.sh` — compile step (swiftc -O to ~/.lifeline/bin/lifeline-menubar) when
    swiftc exists; load agent; plain note when absent. Both uninstallers remove it.

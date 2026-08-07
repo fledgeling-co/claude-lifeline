@@ -168,6 +168,9 @@ func overallHealth(_ snap: StatusSnapshot?) -> Health {
 
 struct PopoverView: View {
     @ObservedObject var model: Model
+    /// In the detached (torn-off) window the layout goes flexible; in the popover it is
+    /// the fixed 360pt instrument. Same content either way — the model is shared.
+    var inWindow: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -180,7 +183,13 @@ struct PopoverView: View {
             Divider()
             footer
         }
-        .frame(width: 360)
+        .frame(
+            minWidth: 360,
+            maxWidth: inWindow ? .infinity : 360,
+            minHeight: inWindow ? 420 : nil,
+            maxHeight: inWindow ? .infinity : nil,
+            alignment: .topLeading
+        )
         .font(.system(size: 13))
     }
 
@@ -218,10 +227,8 @@ struct PopoverView: View {
     }
 
     var staleBanner: some View {
-        (Text("The watcher has gone quiet. ").fontWeight(.semibold)
-            + Text("Its last update was \(model.staleDescription) ago, so what's below may be stale. Run ")
-            + Text("lifeline doctor").font(.system(size: 11, design: .monospaced))
-            + Text(" in a terminal to check on it."))
+        // Single interpolated Text (the `+` concatenation is deprecated on macOS 26).
+        Text("**The watcher has gone quiet.** Its last update was \(model.staleDescription) ago, so what's below may be stale. Run `lifeline doctor` in a terminal to check on it.")
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .padding(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
@@ -237,7 +244,7 @@ struct PopoverView: View {
                 }
                 .padding(.vertical, 4).padding(.horizontal, 8)
             }
-            .frame(maxHeight: 340)
+            .frame(maxHeight: inWindow ? .infinity : 340)
             .opacity(model.daemonQuiet ? 0.55 : 1)
         } else {
             VStack(spacing: 4) {
@@ -453,12 +460,13 @@ final class Model: ObservableObject {
 
 // MARK: - App delegate: status item + popover + polling
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var statusItem: NSStatusItem!
     private let popover = NSPopover()
     private let model = Model()
     private var timer: Timer?
     private var lastHealth: Health = .ok
+    private var detachedWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -472,6 +480,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         popover.behavior = .transient // click-away and Esc both close it
+        popover.delegate = self       // enables drag-to-detach (the system's own tear-off)
         popover.contentViewController = NSHostingController(rootView: PopoverView(model: model))
 
         model.refresh()
@@ -482,6 +491,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.model.refresh()
             self.applyHealthTint()
         }
+    }
+
+    // MARK: tear-off — drag the popover away and it becomes a real, resizable window.
+    // AppKit animates the detach; we only supply the destination window. The window
+    // hosts a SECOND view over the SAME model, so both surfaces stay live.
+
+    func popoverShouldDetach(_ popover: NSPopover) -> Bool { true }
+
+    func detachableWindow(for popover: NSPopover) -> NSWindow? {
+        if let existing = detachedWindow { return existing }
+        let hosting = NSHostingController(rootView: PopoverView(model: model, inWindow: true))
+        let window = NSWindow(contentViewController: hosting)
+        window.title = "lifeline"
+        window.styleMask = [.titled, .closable, .resizable, .miniaturizable]
+        window.contentMinSize = NSSize(width: 360, height: 420)
+        window.setContentSize(NSSize(width: 520, height: 480))
+        window.isReleasedWhenClosed = false // reused on the next tear-off
+        detachedWindow = window
+        return window
     }
 
     private func applyHealthTint() {

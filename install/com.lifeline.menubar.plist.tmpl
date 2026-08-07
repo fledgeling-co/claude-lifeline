@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The status window (menu-bar app). Rendered by install.sh; only installed when
+     swiftc was available to compile it. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.lifeline.menubar</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>@@LIFELINE_HOME@@/bin/lifeline-menubar</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LIFELINE_HOME</key>
+    <string>@@LIFELINE_HOME@@</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>@@LIFELINE_HOME@@/logs/menubar.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>@@LIFELINE_HOME@@/logs/menubar.err.log</string>
+</dict>
+</plist>
