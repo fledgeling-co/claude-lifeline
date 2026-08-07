@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lifeline — icon concepts</title>
+<style>
+  :root {
+    --bg: #131519; --panel: #1B1E24; --panel-2: #22262E;
+    --ink: #F2F3F5; --ink-2: #A6ACB8; --ink-3: #6C7380;
+    --line: #2C313A; --mint: #19E39A; --coral: #FF6B4A; --amber: #FFB23E;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased; padding: 48px 32px 96px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  header { margin-bottom: 40px; }
+  h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; }
+  h1 .dot { color: var(--mint); }
+  .sub { color: var(--ink-2); margin-top: 6px; max-width: 72ch; }
+  .legend { display: flex; gap: 18px; margin-top: 18px; color: var(--ink-3); font-size: 12px; }
+  .legend b { color: var(--ink-2); font-weight: 600; }
+
+  .concept {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 24px; margin-bottom: 28px;
+  }
+  .concept.reco { border-color: color-mix(in srgb, var(--mint) 45%, var(--line)); }
+  .c-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .c-head h2 { font-size: 18px; font-weight: 650; letter-spacing: -0.01em; }
+  .badge {
+    font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 99px;
+    border: 1px solid var(--line); color: var(--ink-2); background: var(--panel-2);
+  }
+  .badge.star { color: #0E141C; background: var(--mint); border-color: var(--mint); }
+  .badge.park { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, var(--line)); }
+  .direction { color: var(--ink-3); font-size: 12.5px; margin-bottom: 14px; }
+  .c-body { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,1fr); gap: 22px; align-items: start; }
+  @media (max-width: 900px) { .c-body { grid-template-columns: 1fr; } }
+
+  .takes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .take { text-align: center; }
+  .take img {
+    width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 22.5%;
+    background: var(--panel-2); border: 1px solid var(--line); display: block;
+    transition: transform 160ms ease;
+  }
+  .take img:hover { transform: scale(1.03); }
+  @media (prefers-reduced-motion: reduce) { .take img { transition: none; } .take img:hover { transform: none; } }
+  .take figcaption { font-size: 11px; color: var(--ink-3); margin-top: 7px; }
+  .take figcaption b { color: var(--ink-2); font-weight: 600; }
+
+  .sizes { display: flex; gap: 10px; align-items: flex-end; margin-top: 14px; }
+  .sizes .cell { text-align: center; }
+  .sizes img { image-rendering: auto; border-radius: 22.5%; display: block; background: var(--panel-2); }
+  .sizes .px16 img { image-rendering: pixelated; width: 64px; height: 64px; }
+  .sizes .px32 img { image-rendering: pixelated; width: 64px; height: 64px; }
+  .sizes .px128 img { width: 64px; height: 64px; }
+  .sizes figcaption { font-size: 10px; color: var(--ink-3); margin-top: 5px; }
+
+  .notes h3 { font-size: 12px; text-transform: none; color: var(--ink-2); font-weight: 600; margin: 12px 0 4px; }
+  .notes p { color: var(--ink-2); font-size: 13px; }
+  .score { font-variant-numeric: tabular-nums; font-weight: 650; color: var(--ink); }
+  .verdict { margin-top: 14px; padding: 12px 14px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); font-size: 13px; color: var(--ink-2); }
+  .verdict b { color: var(--ink); }
+
+  footer { color: var(--ink-3); font-size: 12px; margin-top: 40px; max-width: 80ch; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>lifeline <span class="dot">·</span> icon concepts</h1>
+    <p class="sub">Five committed directions for the lifeline macOS app icon, each rendered through three engines:
+      the hand-authored layered SVG master (the file that ships), an independent Arrow vector take, and a GPT&nbsp;Image
+      material take steered with Apple Tahoe corpus references. Small sizes shown are the real 128/32/16&nbsp;px renders,
+      the squint test, not scaled mockups.</p>
+    <div class="legend">
+      <span><b>A</b> layered SVG master</span>
+      <span><b>B</b> Arrow vector take</span>
+      <span><b>C</b> raster material take</span>
+      <span><b>Score</b> 12-point icon rubric</span>
+    </div>
+  </header>
+
+  <!-- 1 · Recovery Pulse -->
+  <section class="concept reco">
+    <div class="c-head">
+      <h2>1 · Recovery Pulse</h2>
+      <span class="badge star">Recommended · 11/12</span>
+      <span class="badge">Dark-Field Emissive</span>
+    </div>
+    <p class="direction">A heartbeat that flatlines, dips, then decisively recovers. Emissive mint on a charcoal cushion; the bright node at the peak is the agent brought back.</p>
+    <div class="c-body">
+      <div>
+        <div class="takes">
+          <figure class="take"><img src="concept-1-recovery-pulse-masked.png" alt="Recovery Pulse — SVG master"><figcaption><b>A</b> · master</figcaption></figure>
+          <figure class="take"><img src="engineB/c1-recovery-pulse-arrow-87229c-512.png" alt="Recovery Pulse — Arrow vector take"><figcaption><b>B</b> · Arrow</figcaption></figure>
+          <figure class="take"><img src="engineC/c1-recovery-pulse-raster-e650f0-512.png" alt="Recovery Pulse — raster material take"><figcaption><b>C</b> · raster</figcaption></figure>
+        </div>
+        <div class="sizes">
+          <figure class="cell px128"><img src="concept-1-recovery-pulse-128.png" alt=""><figcaption>128</figcaption></figure>
+          <figure class="cell px32"><img src="concept-1-recovery-pulse-32.png" alt=""><figcaption>32</figcaption></figure>
+          <figure class="cell px16"><img src="concept-1-recovery-pulse-16.png" alt=""><figcaption>16</figcaption></figure>
+        </div>
+      </div>
+      <div class="notes">
+        <h3>Why it works</h3>
+        <p>The whole product in one gesture: going under, then back. Silhouette names itself at 16&nbsp;px; identity is carried in shape and value, so Dark/Clear/Tinted variants hold. One hue family.</p>
+        <h3>Liability</h3>
+        <p>An ECG can read "health app" at a blink; the flatline prefix is the argument against that. The raster take added a glowing border frame; ignore the frame, keep the glow register.</p>
+        <div class="verdict"><b>Ship this one.</b> Score <span class="score">11/12</span>; passes all four non-negotiables.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 · Caught Line -->
+  <section class="concept">
+    <div class="c-head">
+      <h2>2 · Caught Line</h2>
+      <span class="badge">9/12</span>
+      <span class="badge">Tahoe · saturated tile + white frost</span>
+    </div>
+    <p class="direction">A frosted-white lifeline dips and hooks back up, catching a node in the low of its curve. Teal gel tile; white as a material, the ground bleeding through.</p>
+    <div class="c-body">
+      <div>
+        <div class="takes">
+          <figure class="take"><img src="concept-2-caught-line-masked.png" alt="Caught Line — SVG master"><figcaption><b>A</b> · master</figcaption></figure>
+          <figure class="take"><img src="engineB/c2-caught-line-arrow-f4fb36-512.png" alt="Caught Line — Arrow vector take"><figcaption><b>B</b> · Arrow</figcaption></figure>
+          <figure class="take"><img src="engineC/c2-caught-line-raster-bb927a-512.png" alt="Caught Line — raster material take"><figcaption><b>C</b> · raster</figcaption></figure>
+        </div>
+        <div class="sizes">
+          <figure class="cell px128"><img src="concept-2-caught-line-128.png" alt=""><figcaption>128</figcaption></figure>
+          <figure class="cell px32"><img src="concept-2-caught-line-32.png" alt=""><figcaption>32</figcaption></figure>
+          <figure class="cell px16"><img src="concept-2-caught-line-16.png" alt=""><figcaption>16</figcaption></figure>
+        </div>
+      </div>
+      <div class="notes">
+        <h3>Why it works</h3>
+        <p>Clean, native, quietly does the metaphor. The most Apple-register of the five.</p>
+        <h3>Liability</h3>
+        <p>The catch reads softly; the node can read as a drip. The raster take accidentally produced a figure-with-raised-arms double-read (crest as arms, node as head), a stronger metaphor worth folding into the master if this direction is chosen.</p>
+        <div class="verdict">Score <span class="score">9/12</span>. Good bones; needs the figure double-read to earn the slot.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 · Ring Buoy -->
+  <section class="concept reco">
+    <div class="c-head">
+      <h2>3 · Ring Buoy</h2>
+      <span class="badge star">Runner-up · 11/12</span>
+      <span class="badge">Tahoe · porcelain + gel object</span>
+    </div>
+    <p class="direction">The literal lifeline: a coral gel ring-buoy with frosted lashings on porcelain, the teal agent-node resting safely in the centre. Warm coral deliberately breaks the blue default.</p>
+    <div class="c-body">
+      <div>
+        <div class="takes">
+          <figure class="take"><img src="concept-3-ring-buoy-masked.png" alt="Ring Buoy — SVG master"><figcaption><b>A</b> · master</figcaption></figure>
+          <figure class="take"><img src="engineB/c3-ring-buoy-arrow-446915-512.png" alt="Ring Buoy — Arrow vector take"><figcaption><b>B</b> · Arrow</figcaption></figure>
+          <figure class="take"><img src="engineC/c3-ring-buoy-raster-cfd9d3-512.png" alt="Ring Buoy — raster material take"><figcaption><b>C</b> · raster</figcaption></figure>
+        </div>
+        <div class="sizes">
+          <figure class="cell px128"><img src="concept-3-ring-buoy-128.png" alt=""><figcaption>128</figcaption></figure>
+          <figure class="cell px32"><img src="concept-3-ring-buoy-32.png" alt=""><figcaption>32</figcaption></figure>
+          <figure class="cell px16"><img src="concept-3-ring-buoy-16.png" alt=""><figcaption>16</figcaption></figure>
+        </div>
+      </div>
+      <div class="notes">
+        <h3>Why it works</h3>
+        <p>The most instantly nameable silhouette of the set, at every size including 16&nbsp;px. The raster material take is excellent; the ship path is the master's geometry with C's material cues.</p>
+        <h3>Liability</h3>
+        <p>Adjacent to help/support iconography (Apple's Tips territory). The teal agent-node in the centre is what makes it <em>this</em> app.</p>
+        <div class="verdict">Score <span class="score">11/12</span>. The alternate if a warmer, more literal mark is preferred.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 · Safety Line -->
+  <section class="concept">
+    <div class="c-head">
+      <h2>4 · Safety Line</h2>
+      <span class="badge park">Parked · 7/12</span>
+      <span class="badge">Monochrome Logomark</span>
+    </div>
+    <p class="direction">One continuous rope forming a lowercase "l" that curls into a rescue hook cradling a mint bead. Austere developer register.</p>
+    <div class="c-body">
+      <div>
+        <div class="takes">
+          <figure class="take"><img src="concept-4-safety-line-masked.png" alt="Safety Line — SVG master"><figcaption><b>A</b> · master</figcaption></figure>
+          <figure class="take"><img src="engineB/c4-safety-line-arrow-d82f9f-512.png" alt="Safety Line — Arrow vector take"><figcaption><b>B</b> · Arrow</figcaption></figure>
+          <figure class="take"><img src="engineC/c4-safety-line-raster-da41cd-512.png" alt="Safety Line — raster material take"><figcaption><b>C</b> · raster</figcaption></figure>
+        </div>
+        <div class="sizes">
+          <figure class="cell px128"><img src="concept-4-safety-line-128.png" alt=""><figcaption>128</figcaption></figure>
+          <figure class="cell px32"><img src="concept-4-safety-line-32.png" alt=""><figcaption>32</figcaption></figure>
+          <figure class="cell px16"><img src="concept-4-safety-line-16.png" alt=""><figcaption>16</figcaption></figure>
+        </div>
+      </div>
+      <div class="notes">
+        <h3>Why it's parked</h3>
+        <p>At 16&nbsp;px the mark collapses toward an exclamation mark, and the raster take exposed a noose association in the hanging-rope composition that has no place in a tool about things dying. Kept for the record, not recommended.</p>
+        <div class="verdict">Score <span class="score">7/12</span>. Fails the squint test; the association settles it.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 · Caught Before the Fall -->
+  <section class="concept">
+    <div class="c-head">
+      <h2>5 · Caught Before the Fall</h2>
+      <span class="badge">9/12</span>
+      <span class="badge">Dark gel + emissive interior</span>
+    </div>
+    <p class="direction">A silver safety line strung between the top corners bows under the glowing amber orb it has just caught. Premium, nocturnal; the sanctioned emissive-interior move.</p>
+    <div class="c-body">
+      <div>
+        <div class="takes">
+          <figure class="take"><img src="concept-5-caught-before-fall-masked.png" alt="Caught Before the Fall — SVG master"><figcaption><b>A</b> · master</figcaption></figure>
+          <figure class="take"><img src="engineB/c5-caught-fall-arrow-5dc820-512.png" alt="Caught Before the Fall — Arrow vector take"><figcaption><b>B</b> · Arrow</figcaption></figure>
+          <figure class="take"><img src="engineC/c5-caught-fall-raster-a5fd8d-512.png" alt="Caught Before the Fall — raster material take"><figcaption><b>C</b> · raster</figcaption></figure>
+        </div>
+        <div class="sizes">
+          <figure class="cell px128"><img src="concept-5-caught-before-fall-128.png" alt=""><figcaption>128</figcaption></figure>
+          <figure class="cell px32"><img src="concept-5-caught-before-fall-32.png" alt=""><figcaption>32</figcaption></figure>
+          <figure class="cell px16"><img src="concept-5-caught-before-fall-16.png" alt=""><figcaption>16</figcaption></figure>
+        </div>
+      </div>
+      <div class="notes">
+        <h3>Why it works</h3>
+        <p>Gorgeous at Dock size; the emissive-interior move is the current era's sanctioned second light.</p>
+        <h3>Liability</h3>
+        <p>The thin line fades at 16&nbsp;px and the read drifts toward "pendant necklace" (the Arrow take confirmed the drift). Viable if the line gains real weight.</p>
+        <div class="verdict">Score <span class="score">9/12</span>. The "pro dark" alternative, after a line-weight pass.</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>Masters are layered SVGs (<code>bg / mid / fg / highlight</code> groups) mapping 1:1 onto Icon Composer layers;
+    the system applies the squircle mask and shadow, so nothing here bakes corners or shadows. Rubric and per-concept
+    audit detail: <code>README.md</code> in this folder. Build steps for the .icns are there too.</p>
+  </footer>
+</div>
+</body>
+</html>
