@@ -41,7 +41,8 @@
 
   <!-- wordmark + line -->
   <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
-    <text x="820" y="158" font-size="64" font-weight="700" letter-spacing="-1.5" fill="#F2F3F5">lifeline</text>
-    <text x="822" y="196" font-size="19" fill="#8A93A0">Claude Code workflows, brought back.</text>
+    <text x="822" y="106" font-size="15" letter-spacing="0.3" fill="#5A6470">fledgeling-co / claude-lifeline</text>
+    <text x="820" y="168" font-size="64" font-weight="700" letter-spacing="-1.5" fill="#F2F3F5">lifeline</text>
+    <text x="822" y="206" font-size="19" fill="#8A93A0">Claude Code workflows, brought back.</text>
   </g>
 </svg>

@@ -2,7 +2,7 @@
 
 ![lifeline: Claude Code workflows, brought back](design/banner.png)
 
-[![CI](https://github.com/lprhodes/lifeline/actions/workflows/ci.yml/badge.svg)](https://github.com/lprhodes/lifeline/actions/workflows/ci.yml)
+[![CI](https://github.com/fledgeling-co/claude-lifeline/actions/workflows/ci.yml/badge.svg)](https://github.com/fledgeling-co/claude-lifeline/actions/workflows/ci.yml)
 ![macOS](https://img.shields.io/badge/macOS-one--command_install-2ea44f)
 ![licence](https://img.shields.io/badge/licence-MIT-blue)
 
@@ -11,7 +11,7 @@
 </div>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lprhodes/lifeline/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fledgeling-co/claude-lifeline/main/install.sh | bash
 ```
 
 After that your command is still `claude`. There's nothing to remember.
@@ -114,7 +114,7 @@ On top of that, an automated check runs every day against each new Claude Code r
 macOS, one line:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lprhodes/lifeline/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fledgeling-co/claude-lifeline/main/install.sh | bash
 ```
 
 That sets everything up, points Claude Code through lifeline, and gets out of your way. Your command stays `claude`.
@@ -129,7 +129,7 @@ lifeline doctor    # a quick health check of lifeline itself
 **Remove it cleanly** (restores everything to exactly how it was, one line, nothing to set up first):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lprhodes/lifeline/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fledgeling-co/claude-lifeline/main/uninstall.sh | bash
 ```
 
 > [!WARNING]

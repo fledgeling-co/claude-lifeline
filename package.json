@@ -1,14 +1,14 @@
 {
-  "name": "@lprhodes/lifeline",
+  "name": "@fledgeling-co/claude-lifeline",
   "version": "0.1.0",
   "description": "A resilience and recovery layer for the Claude Code CLI's Workflow feature.",
   "type": "module",
   "license": "MIT",
   "author": "Luke Rhodes",
-  "homepage": "https://github.com/lprhodes/lifeline",
+  "homepage": "https://github.com/fledgeling-co/claude-lifeline",
   "repository": {
     "type": "git",
-    "url": "https://github.com/lprhodes/lifeline.git"
+    "url": "https://github.com/fledgeling-co/claude-lifeline.git"
   },
   "engines": {
     "node": ">=22"

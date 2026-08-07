@@ -2,7 +2,7 @@
 #
 # lifeline uninstaller — one line, restores everything to how it was.
 #
-#   curl -fsSL https://raw.githubusercontent.com/lprhodes/lifeline/main/uninstall.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/fledgeling-co/claude-lifeline/main/uninstall.sh | bash
 #
 # Self-contained: it reads what the installer recorded under ~/.lifeline, so it works
 # whether you run it piped through curl or from a local checkout. Nothing needs to be
