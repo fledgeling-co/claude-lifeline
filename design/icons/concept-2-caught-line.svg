@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- lifeline icon · Concept 2 "Caught Line" · Direction 2b Tahoe saturated tile + white frost
+     A single frosted-white lifeline that dips (something going under) and hooks back up,
+     catching a falling node in its curve. Saturated teal gel tile = calm, trustworthy,
+     alive. White is a MATERIAL here: the tile hue bleeds through the thinner areas.
+     Layers: bg / mid / fg / highlight. Full-bleed 1024, no baked mask/shadow. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="c2-tile" x1="512" y1="40" x2="512" y2="984" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#18C2AE"/>
+      <stop offset="55%" stop-color="#0DA69A"/>
+      <stop offset="100%" stop-color="#07857F"/>
+    </linearGradient>
+    <linearGradient id="c2-frost" x1="512" y1="300" x2="512" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.96"/>
+      <stop offset="100%" stop-color="#EAFBF8" stop-opacity="0.82"/>
+    </linearGradient>
+    <radialGradient id="c2-rim" cx="50%" cy="30%" r="80%">
+      <stop offset="0%" stop-color="#3BE0CE" stop-opacity="0.55"/>
+      <stop offset="60%" stop-color="#3BE0CE" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="c2-bloom" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+  </defs>
+
+  <!-- bg: saturated cushion tile with inner rim light + top-hue crown -->
+  <g id="bg">
+    <rect width="1024" height="1024" fill="url(#c2-tile)"/>
+    <rect width="1024" height="1024" fill="url(#c2-rim)"/>
+    <rect x="6" y="6" width="1012" height="1012" rx="222" fill="none" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="6"/>
+    <rect x="14" y="14" width="996" height="996" rx="214" fill="none" stroke="#04524E" stroke-opacity="0.35" stroke-width="6"/>
+  </g>
+
+  <!-- mid: the ground-hue cast shadow beneath the frosted line (depth, one soft top light) -->
+  <g id="mid">
+    <path d="M170 470 C300 470 330 560 452 560 C560 560 560 400 668 400 C792 400 800 596 862 596"
+          fill="none" stroke="#04635C" stroke-opacity="0.35" stroke-width="86"
+          stroke-linecap="round" stroke-linejoin="round" filter="url(#c2-bloom)" transform="translate(0,26)"/>
+  </g>
+
+  <!-- fg: the frosted lifeline + the caught node. The line dips then hooks up around the
+       node = the falling agent caught before it goes under. -->
+  <g id="fg">
+    <path d="M170 458 C300 458 330 548 452 548 C560 548 560 388 668 388 C792 388 800 584 862 584"
+          fill="none" stroke="url(#c2-frost)" stroke-width="78"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- the caught node sitting in the low of the curve -->
+    <circle cx="452" cy="612" r="52" fill="url(#c2-frost)"/>
+    <!-- hue bleed-through where the node meets the line (authored overlap) -->
+    <circle cx="452" cy="576" r="30" fill="#0DA69A" fill-opacity="0.30"/>
+  </g>
+
+  <!-- highlight: top-edge frost highlight; droppable. Silhouette carries the identity. -->
+  <g id="highlight">
+    <path d="M200 430 C320 430 348 520 452 520 C556 520 560 360 668 360"
+          fill="none" stroke="#FFFFFF" stroke-opacity="0.5" stroke-width="16"
+          stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

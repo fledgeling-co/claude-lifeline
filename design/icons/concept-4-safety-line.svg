@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- lifeline icon · Concept 4 "Safety Line" · Direction 3 Monochrome Logomark
+     One continuous rope/safety-line that resolves into a lowercase "l" for lifeline and
+     ends in a rescue hook/loop. Austere developer register, off-white on near-black; ships
+     with an explicit tint-safe filled variant (the #10 honesty trap for mono marks).
+     Layers: bg / fg / highlight. Full-bleed 1024, no baked mask/shadow. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="c4-ground" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#15171B"/>
+      <stop offset="100%" stop-color="#0C0D10"/>
+    </linearGradient>
+  </defs>
+
+  <!-- bg: near-black flat field with a faint cushion rim (commit to shipping the field so it
+       never floats in the Dock). -->
+  <g id="bg">
+    <rect width="1024" height="1024" fill="url(#c4-ground)"/>
+    <rect x="8" y="8" width="1008" height="1008" rx="220" fill="none" stroke="#2A2D34" stroke-opacity="0.7" stroke-width="3"/>
+  </g>
+
+  <!-- fg: the safety line. A single stroke drops as the stem of an "l", loops into a rescue
+       hook at the foot, and catches a bead. Rounded caps = rope. Silhouette does all the work. -->
+  <g id="fg" fill="none" stroke="#F4F5F7" stroke-width="72" stroke-linecap="round" stroke-linejoin="round">
+    <!-- the line + hook: down the stem, curl into a catching loop -->
+    <path d="M512 214
+             L512 610
+             C512 726 606 726 606 636
+             C606 566 512 566 470 636
+             C440 690 470 774 560 774"/>
+  </g>
+
+  <!-- the caught bead sitting in the hook = the rescued agent -->
+  <g id="fg-bead">
+    <circle cx="537" cy="655" r="40" fill="#19E39A"/>
+  </g>
+
+  <!-- highlight: a single top catchlight on the stem; droppable without losing the mark. -->
+  <g id="highlight">
+    <line x1="512" y1="250" x2="512" y2="430" stroke="#FFFFFF" stroke-opacity="0.35"
+          stroke-width="14" stroke-linecap="round"/>
+  </g>
+</svg>

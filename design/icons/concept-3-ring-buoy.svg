@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- lifeline icon · Concept 3 "Ring Buoy" · Direction 2a Tahoe porcelain + gel object
+     The literal metaphor: a life-ring / ring-buoy, the thing you throw to someone going
+     under, re-materialised as a soft gel object on a porcelain cushion. Warm coral to
+     deliberately break the corpus's blue default. One clearly-lit object, soft cast shadow.
+     Layers: bg / mid / fg / highlight. Full-bleed 1024, no baked mask/shadow. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="c3-porcelain" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FEFEFF"/>
+      <stop offset="100%" stop-color="#EEF0F3"/>
+    </linearGradient>
+    <linearGradient id="c3-coral" x1="512" y1="250" x2="512" y2="774" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FF7B5A"/>
+      <stop offset="100%" stop-color="#F4502F"/>
+    </linearGradient>
+    <radialGradient id="c3-sheen" cx="42%" cy="34%" r="42%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="c3-cast" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+  </defs>
+
+  <!-- bg: porcelain cushion tile (rim + faint vignette) -->
+  <g id="bg">
+    <rect width="1024" height="1024" fill="url(#c3-porcelain)"/>
+    <rect x="8" y="8" width="1008" height="1008" rx="220" fill="none" stroke="#FFFFFF" stroke-opacity="0.9" stroke-width="6"/>
+    <rect x="8" y="8" width="1008" height="1008" rx="220" fill="none" stroke="#C9CDD4" stroke-opacity="0.6" stroke-width="3"/>
+  </g>
+
+  <!-- mid: soft cast shadow the ring drops onto the porcelain -->
+  <g id="mid">
+    <ellipse cx="512" cy="576" rx="300" ry="300" fill="#B9411F" fill-opacity="0.16" filter="url(#c3-cast)" transform="translate(0,34)"/>
+  </g>
+
+  <!-- fg: the gel ring-buoy. Outer coral torus, white porcelain inner ring, four white
+       lashings (the rope wrap). The torus is a thick stroked circle; lashings authored on top. -->
+  <g id="fg">
+    <!-- coral gel torus -->
+    <circle cx="512" cy="512" r="248" fill="none" stroke="url(#c3-coral)" stroke-width="150"/>
+    <!-- inner porcelain band -->
+    <circle cx="512" cy="512" r="248" fill="none" stroke="#FBFBFD" stroke-width="150" stroke-opacity="0" />
+    <!-- the four white grip lashings across the torus -->
+    <g stroke="#FCFCFE" stroke-width="40" stroke-linecap="round">
+      <line x1="512" y1="222" x2="512" y2="322"/>
+      <line x1="512" y1="702" x2="512" y2="802"/>
+      <line x1="222" y1="512" x2="322" y2="512"/>
+      <line x1="702" y1="512" x2="802" y2="512"/>
+    </g>
+    <!-- the rescued node resting inside the ring = the agent, safe -->
+    <circle cx="512" cy="512" r="70" fill="#0DA69A"/>
+    <circle cx="512" cy="512" r="70" fill="url(#c3-sheen)"/>
+  </g>
+
+  <!-- highlight: top-left gel sheen on the torus; droppable. Ring silhouette = identity. -->
+  <g id="highlight">
+    <path d="M330 360 A248 248 0 0 1 660 300" fill="none" stroke="#FFFFFF" stroke-opacity="0.55"
+          stroke-width="26" stroke-linecap="round" transform="translate(0,-8)"/>
+    <circle cx="486" cy="486" r="20" fill="#EAFBF8" fill-opacity="0.9"/>
+  </g>
+</svg>

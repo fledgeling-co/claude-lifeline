@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- lifeline icon · Concept 5 "Caught Before the Fall" · Direction 2c dark gel + emissive interior
+     Dual-function primitive: a slack safety-line strung across the tile, bowed under the
+     weight of a falling node it has just caught. The node is an emissive amber core under
+     glass = the rescued agent, glowing safe. Cool charcoal gel tile (pro/system register).
+     Layers: bg / mid / fg / highlight. Full-bleed 1024, no baked mask/shadow. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="c5-tile" x1="512" y1="0" x2="512" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#2A3340"/>
+      <stop offset="55%" stop-color="#1C2430"/>
+      <stop offset="100%" stop-color="#141A23"/>
+    </linearGradient>
+    <linearGradient id="c5-line" x1="180" y1="360" x2="844" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#8FA0B4"/>
+      <stop offset="50%" stop-color="#C7D3E0"/>
+      <stop offset="100%" stop-color="#8FA0B4"/>
+    </linearGradient>
+    <radialGradient id="c5-core" cx="50%" cy="42%" r="60%">
+      <stop offset="0%" stop-color="#FFE7A8"/>
+      <stop offset="45%" stop-color="#FFB23E"/>
+      <stop offset="100%" stop-color="#F08A1C"/>
+    </radialGradient>
+    <radialGradient id="c5-glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FFB23E" stop-opacity="0.7"/>
+      <stop offset="100%" stop-color="#FFB23E" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="c5-soft" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="16"/>
+    </filter>
+  </defs>
+
+  <!-- bg: charcoal cushion tile with rim + vignette -->
+  <g id="bg">
+    <rect width="1024" height="1024" fill="url(#c5-tile)"/>
+    <rect x="6" y="6" width="1012" height="1012" rx="222" fill="none" stroke="#41505F" stroke-opacity="0.55" stroke-width="6"/>
+    <rect x="16" y="16" width="992" height="992" rx="212" fill="none" stroke="#000000" stroke-opacity="0.3" stroke-width="8"/>
+  </g>
+
+  <!-- mid: the amber glow the caught core throws into the charcoal -->
+  <g id="mid">
+    <circle cx="512" cy="612" r="330" fill="url(#c5-glow)"/>
+  </g>
+
+  <!-- fg: the safety line, anchored at both top corners, bowed down under the caught node.
+       The bow IS the catch: the line took the weight before the node could fall through. -->
+  <g id="fg">
+    <!-- line soft shadow -->
+    <path d="M150 300 C360 300 400 612 512 612 C624 612 664 300 874 300"
+          fill="none" stroke="#0C1119" stroke-opacity="0.5" stroke-width="52"
+          stroke-linecap="round" filter="url(#c5-soft)" transform="translate(0,20)"/>
+    <!-- the line -->
+    <path d="M150 300 C360 300 400 600 512 600 C624 600 664 300 874 300"
+          fill="none" stroke="url(#c5-line)" stroke-width="34" stroke-linecap="round"/>
+    <!-- anchor nubs where the line meets the mask edge (edge-bleed physicality) -->
+    <circle cx="150" cy="300" r="26" fill="#B7C3D2"/>
+    <circle cx="874" cy="300" r="26" fill="#B7C3D2"/>
+    <!-- the rescued node: emissive amber core under a glass shell, cradled in the bow -->
+    <circle cx="512" cy="616" r="98" fill="#0E141C"/>
+    <circle cx="512" cy="616" r="86" fill="url(#c5-core)"/>
+  </g>
+
+  <!-- highlight: glass rim on the node + one top catchlight on the line; both droppable. -->
+  <g id="highlight">
+    <circle cx="512" cy="616" r="86" fill="none" stroke="#FFF3D6" stroke-opacity="0.5" stroke-width="6"/>
+    <circle cx="486" cy="590" r="22" fill="#FFF6E2" fill-opacity="0.85"/>
+    <path d="M210 296 C380 296 420 470 470 540" fill="none" stroke="#EAF1F8" stroke-opacity="0.4"
+          stroke-width="8" stroke-linecap="round"/>
+  </g>
+</svg>

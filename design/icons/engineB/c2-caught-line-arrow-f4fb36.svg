@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 115.7 114">
+<!-- SVG created with Arrow, by QuiverAI (https://quiver.ai) -->
+  <style type="text/css">.cls-0 {fill:url(#SVGID_1_);}
+.cls-1 {opacity:0.6;fill:url(#SVGID_2_);enable-background:new ;}
+.cls-2 {fill:url(#SVGID_3_);}
+.cls-3 {fill:url(#SVGID_4_);}</style>
+  <linearGradient id="SVGID_1_" x1="58.5" x2="57.05" y1="-.7931" y2="114.8" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#2CB3AC" offset="0"/>
+    <stop stop-color="#157075" offset="1"/>
+  </linearGradient>
+  <path class="cls-0" d="m97 114.7h-78.3c-9.3 0-16.4-6.8-18.7-15.7v-99.4c1-6.4 11.1-10 17-10h80.3c9.6 0 18.7 10.5 18.7 18.4v82.9c0 10.8-7.5 23.8-19 23.8z"/>
+  <linearGradient id="SVGID_2_" x1="6.368" x2="109.4" y1="60.35" y2="60.35" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#fff" stop-opacity="0" offset=".06036"/>
+    <stop stop-color="#B4DADC" offset=".2548"/>
+    <stop stop-color="#F5FCFD" offset=".629"/>
+    <stop stop-color="#309A9A" stop-opacity="0" offset=".9776"/>
+  </linearGradient>
+  <path class="cls-1" d="m8.1 64.8-1.7-1.9c5.4-4.7 10.6-7.4 17.2-7.5s10.7 2.3 15.4 6.4c4 3.7 7.9 9.3 16.1 10.7 9.9 0.8 17.1-4.8 20.9-18 1.5-5.5 2.5-10.4 7.5-13.9 5.3-3.9 13.7-6.6 25.3 4.1l-1.7 1.9c-7.1-6.3-12.8-8.1-18.2-6.2-4.1 1.5-7.1 5.2-8.7 10.6-1.2 4.2-1.9 8.4-4.6 13.1-4 7.1-10 11.2-17.7 11.2-9.2-0.5-13.8-4.1-18.7-9.4-4.7-4.8-8.9-8-15.5-7.9s-11.4 3.2-15.6 6.8z"/>
+  <linearGradient id="SVGID_3_" x1="59.39" x2="55.79" y1="71.32" y2="77.66" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#fff" offset="0"/>
+    <stop stop-color="#CCEAEA" offset="1"/>
+  </linearGradient>
+  <circle class="cls-2" cx="57.8" cy="74.2" r="4.5"/>
+  <radialGradient id="SVGID_4_" cx="57.73" cy="77.41" r="5.318" gradientTransform="matrix(1 0 0 .7118 0 21.84)" gradientUnits="userSpaceOnUse">
+    <stop stop-color="#0A0A0A" offset="0"/>
+    <stop stop-color="#0E6B6F" stop-opacity="0" offset="1"/>
+  </radialGradient>
+  <ellipse class="cls-3" cx="57.7" cy="77.4" rx="5.3" ry="3.8"/>
+</svg>
