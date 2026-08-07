@@ -72,7 +72,7 @@
 
   /* ---------- popover / window shell ---------- */
   .shell {
-    position: fixed; z-index: 30; width: 360px;
+    position: fixed; z-index: 30; width: 380px;
     border-radius: 20px; overflow: hidden;
     box-shadow: 0 18px 50px rgba(0,0,0,0.38), 0 0 0 0.5px rgba(0,0,0,0.2);
     opacity: 0; transform: scale(0.92); transform-origin: top right;
@@ -83,7 +83,7 @@
   .shell.dragging { transition: none; transform: rotate(-1deg) scale(1.02); box-shadow: 0 34px 90px rgba(0,0,0,0.55); }
   .shell.window {
     width: 520px; border-radius: 12px;
-    resize: both; overflow: auto; min-width: 360px; min-height: 420px; max-width: 900px; max-height: 90vh;
+    resize: both; overflow: auto; min-width: 380px; min-height: 420px; max-width: 900px; max-height: 90vh;
     transform: none; transition: opacity 0.18s ease, border-radius 0.25s ease, width 0.25s ease;
   }
   @media (prefers-reduced-motion: reduce) {
@@ -155,11 +155,22 @@
   @keyframes barstripe { to { background-position: 44px 0; } }
   @media (prefers-reduced-motion: reduce) { .healthbar.installing .good::before { animation: none; } }
   .divider { height: 1px; }
-  .rundiv { height: 1px; margin: 2px 16px; }
-  .runs { padding: 4px 0; max-height: 340px; overflow-y: auto; }
+  .rundiv { height: 1px; margin: 0 14px; }
+  .runs { padding: 6px 8px; max-height: 468px; overflow-y: auto; }
   .shell.window .runs { max-height: none; }
-  .run { padding: 2px 8px; }
-  .row { display: flex; align-items: center; gap: 8px; border-radius: 8px; padding: 5px 8px; min-height: 24px; transition: background 0.2s ease; }
+  /* each run is its own quiet unit; the open one gets a faint card so the accordion reads */
+  .run { padding: 0; border-radius: 12px; }
+  .run + .run { margin-top: 2px; }
+  .light .run.expanded { background: rgba(0,0,0,0.035); }
+  .dark .run.expanded { background: rgba(255,255,255,0.045); }
+  /* a finished run is greyed at the bottom to show it's done; expanding restores it */
+  .run.done:not(.expanded) { opacity: 0.5; }
+  .row {
+    display: flex; align-items: center; gap: 10px; border-radius: 12px;
+    padding: 10px 12px; min-height: 34px; transition: background 0.15s ease; cursor: default;
+  }
+  .light .run:not(.expanded) .row:hover { background: rgba(0,0,0,0.045); }
+  .dark  .run:not(.expanded) .row:hover { background: rgba(255,255,255,0.05); }
   .chev { width: 10px; font-size: 9px; flex: none; text-align: center; }
   .dot { width: 8px; height: 8px; border-radius: 4px; flex: none; }
   .dot.ok { background: #34C759; } .dot.warn { background: #FF8D28; }
@@ -169,38 +180,48 @@
   .dot.paused { background: transparent; box-shadow: inset 0 0 0 2px #E0A33C; }
   .run-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* the run shows its workflow name (bold) with the workspace/repo beneath, small + dim */
-  .run-names { display: flex; flex-direction: column; min-width: 0; gap: 0; line-height: 1.15; }
-  .run-ws { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .run-id { font-size: 10px; }
-  .chip { margin-left: auto; font-size: 10px; line-height: 13px; font-weight: 600; padding: 1.5px 7px; border-radius: 99px; flex: none; }
+  .run-names { display: flex; flex-direction: column; min-width: 0; gap: 1px; line-height: 1.25; flex: 1 1 auto; }
+  .run-ws { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .run-id { font-size: 11px; }
+  /* the compact right-hand summary on a collapsed row: how many agents are doing what */
+  .counts { margin-left: auto; flex: none; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .light .counts { color: rgba(0,0,0,0.5); } .dark .counts { color: rgba(255,255,255,0.5); }
+  .counts b { font-weight: 600; }
+  .light .counts b { color: rgba(0,0,0,0.72); } .dark .counts b { color: rgba(255,255,255,0.82); }
+  .chip { flex: none; font-size: 10px; line-height: 13px; font-weight: 600; padding: 1.5px 7px; border-radius: 99px; }
   .chip.warn { color: #B25000; background: rgba(255,141,40,0.16); }
   .chip.ok   { color: #1B7A33; background: rgba(52,199,89,0.16); }
   .dark .chip.warn { color: #FFB067; } .dark .chip.ok { color: #6FE08B; }
   .chip.recover { color: #067A6A; background: rgba(0,200,179,0.16); }
   .dark .chip.recover { color: #4CE0B3; }
-  .agents { padding: 0 0 2px 26px; }
+  .agents { padding: 2px 10px 2px 30px; display: flex; flex-direction: column; gap: 2px; }
   .agent-block { border-radius: 8px; }
-  .light .agent-block.open { background: rgba(0,0,0,0.03); }
-  .dark .agent-block.open { background: rgba(255,255,255,0.035); }
-  .agent { display: flex; align-items: center; gap: 8px; padding: 3px 8px; border-radius: 6px; min-height: 26px; transition: background 0.15s ease; }
-  .agent .aname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .agent .astate { margin-left: auto; font-size: 11px; }
+  .light .agent-block.open { background: rgba(0,0,0,0.035); }
+  .dark .agent-block.open { background: rgba(255,255,255,0.04); }
+  .agent { display: flex; align-items: center; gap: 9px; padding: 6px 9px; border-radius: 8px; min-height: 30px; transition: background 0.15s ease; }
+  .light .agent:hover { background: rgba(0,0,0,0.04); } .dark .agent:hover { background: rgba(255,255,255,0.05); }
+  .agent .aname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .agent .astate { margin-left: auto; font-size: 11px; flex: none; white-space: nowrap; }
 
   /* one calm activity line under a run (the narrator). tertiary, not mono, not a log. */
-  .noteline { padding: 0 8px 4px 34px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* one calm activity line under a run (the narrator). two lines, tap to expand to full. */
+  .noteline { padding: 2px 12px 6px 30px; font-size: 12px; cursor: default;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .noteline.open { -webkit-line-clamp: unset; }
 
   /* the caller: the human's claude session that launched the run. A small tag + last line. */
   .callerline {
-    display: flex; align-items: center; gap: 7px; padding: 2px 8px 4px 34px; font-size: 11px;
-    border-radius: 6px; transition: background 0.15s ease;
+    display: flex; align-items: center; gap: 8px; padding: 3px 12px 7px 30px; font-size: 12px;
+    border-radius: 8px; transition: background 0.15s ease;
   }
   .light .callerline:hover { background: rgba(0,0,0,0.04); } .dark .callerline:hover { background: rgba(255,255,255,0.05); }
   .caller-tag { flex: none; font-size: 9px; font-weight: 600; padding: 1px 6px; border-radius: 99px; }
   .light .caller-tag { background: rgba(0,0,0,0.07); color: rgba(0,0,0,0.5); }
   .dark .caller-tag { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.55); }
-  .caller-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .caller-text { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .caller-text.open { -webkit-line-clamp: unset; }
   .light .caller-text { color: rgba(0,0,0,0.5); } .dark .caller-text { color: rgba(255,255,255,0.5); }
-  .caller-more { padding: 0 8px 6px 41px; font-size: 11px; }
+  .caller-more { padding: 0 12px 6px 47px; font-size: 12px; }
   .light .caller-more { color: rgba(0,0,0,0.42); } .dark .caller-more { color: rgba(255,255,255,0.42); }
   .caller-more div { padding: 1px 0; }
 
@@ -230,7 +251,7 @@
 
   /* the expandable transcript panel (progressive disclosure; click the agent row) */
   .tail-panel {
-    max-height: 0; overflow: hidden; margin: 0 8px 0 24px; border-radius: 8px;
+    max-height: 0; overflow: hidden; margin: 0 12px 0 30px; border-radius: 8px;
     transition: max-height 0.26s cubic-bezier(0.2,0.8,0.2,1), margin 0.26s ease;
   }
   .tail-panel.open { max-height: 150px; margin-top: 2px; margin-bottom: 6px; }
@@ -250,7 +271,7 @@
   .btn.primary:hover { background: #00DAC3; }
   .btn.primary:active { background: #00B4A1; }
   .btn:focus-visible { outline: 2px solid #00C8B3; outline-offset: 1px; }
-  .runactions { display: flex; gap: 6px; padding: 4px 8px 8px 34px; }
+  .runactions { display: flex; gap: 8px; padding: 4px 12px 12px 30px; }
   .footer { display: flex; align-items: center; gap: 10px; padding: 9px 16px; font-size: 11px; }
   .footer .quit { margin-left: auto; border-radius: 6px; padding: 2px 6px; transition: background 0.2s ease; }
   .light .footer .quit:hover { background: rgba(0,0,0,0.06); }
@@ -332,48 +353,60 @@
 const FIXTURES = {
   healthy: {
     online: true, quiet: false,
-    summary: "2 workflows tracked · all healthy", healthy: 1,
+    summary: "2 workflows running · all healthy", healthy: 1,
     runs: [
-      { name: "perch", wf: "perch-close-the-five", id: "wf_795d98f2", state: "recovering", chip: "recover", dot: "recover", expanded: false, agents: [] },
-      { name: "finance", wf: "finance-fleet-42", id: "wf_b7d92af6", state: "completed", chip: "ok", dot: "ok", expanded: false, agents: [] },
+      { name: "diolog-swe-bench", wf: "perch-close-the-five", id: "wf_795d98f2", state: "running", chip: null, dot: "ok", expanded: false,
+        running: 4, pending: 2, dur: "9m", ctx: 0.34, term: "Ghostty", agents: [] },
+      { name: "diolog-web", wf: "finance-fleet-42", id: "wf_b7d92af6", state: "running", chip: null, dot: "ok", expanded: false,
+        running: 5, pending: 0, dur: "3m", ctx: 0.22, term: "Terminal", agents: [] },
+      { name: "perch-ir", wf: "perch-nightly-audit", id: "wf_1c07ab55", state: "completed", chip: "ok", dot: "ok", expanded: false,
+        done: 8, dur: "22m", ctx: 0.51, agents: [] },
     ],
   },
   warning: {
     online: true, quiet: false,
-    summary: "2 workflows tracked · 1 needs a look", healthy: 0.875,
+    summary: "5 workflows running · 1 needs a look", healthy: 0.83,
     runs: [
-      { name: "perch", wf: "perch-fleet-run7", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: true,
-        dur: "14m", ctx: 0.62, term: "Ghostty",
+      { name: "diolog-swe-bench", wf: "perch-fleet-run7", id: "wf_795d98f2", state: "warning", chip: "warn", dot: "warn", expanded: false,
+        running: 3, pending: 1, dur: "14m", ctx: 0.62, term: "Ghostty",
         note: "waiting on work PH-009 before merge",
         caller: ["Kicked off the perch fleet: 4 agents across the review dimensions", "Watching for the verify gate before I merge"],
         agents: [
-          { name: "merge PH-004", dot: "ok", state: "done", dur: "3m 20s", ctx: 0.41, tail: [
+          { name: "merge PH-004", dot: "ok", state: "done", dur: "3m 20s", ctx: 0.19, tok: 188000, tail: [
             "Rebased ai/ph-004 onto staging (2 files)",
             "Gate: typecheck passed, lint passed, e2e passed",
             "Merged PH-004 into staging at c4442c8",
           ]},
-          { name: "work PH-013", dot: "recover", state: "retrying 3/30", dur: "6m 02s", ctx: 0.58, tail: [
+          { name: "work PH-013", dot: "recover", state: "retrying 3/30", dur: "6m 02s", ctx: 0.26, tok: 262000, tail: [
             "Editing src/daemon/ledger.ts (hunk 3/5)",
             "Running vitest test/unit/ledger.test.ts",
             "API Error: 529 Overloaded. lifeline retrying in 12s (attempt 3/30)",
           ]},
-          { name: "work PH-009", dot: "err", state: "failed", retry: true, dur: "8m 47s", ctx: 0.73, tail: [
+          { name: "work PH-009", dot: "err", state: "failed", retry: true, dur: "8m 47s", ctx: 0.40, tok: 404000, tail: [
             "Reading src/gateway/server.ts",
             "Drafting the SSE retry decision",
             "API Error: Unable to connect to API (ConnectionRefused)",
           ]},
-          { name: "work PH-011", dot: "ok", state: "running", dur: "5m 11s", ctx: 0.49, tail: [
+          { name: "work PH-011", dot: "ok", state: "running", dur: "5m 11s", ctx: 0.20, tok: 197000, tail: [
             "Wiring src/cli/index.ts subcommands",
             "Added the lifeline queue add handler",
           ]},
-          { name: "work PH-015", dot: "paused", state: "stalled 11m", dur: "19m 30s", ctx: 0.9, tail: [
+          { name: "work PH-015", dot: "paused", state: "stalled 11m", dur: "19m 30s", ctx: 0.71, tok: 712000, tail: [
             "Editing src/reframe/pipeline.ts",
             "No output or context change for 11 minutes",
             "lifeline: flagged as stalled, will nudge then relaunch",
           ]},
         ]},
-      { name: "finance", wf: "finance-fleet-42", id: "wf_b7d92af6", state: "running", chip: "ok", dot: "ok", expanded: false,
-        dur: "7m", ctx: 0.38, term: "Terminal", note: "implement, 5 agents working", agents: [] },
+      { name: "diolog-web", wf: "finance-fleet-42", id: "wf_b7d92af6", state: "running", chip: null, dot: "ok", expanded: false,
+        running: 5, pending: 2, dur: "7m", ctx: 0.38, term: "Terminal", note: "implement, 5 agents working", agents: [] },
+      { name: "perch-ir", wf: "perch-fleet-run7", id: "wf_3a1e9c02", state: "recovering", chip: "recover", dot: "recover", expanded: false,
+        running: 2, pending: 0, dur: "11m", ctx: 0.44, term: "Ghostty", agents: [] },
+      { name: "dossier-subdomains", wf: "dossier-deploy-sweep", id: "wf_9d5b7e10", state: "running", chip: null, dot: "ok", expanded: false,
+        running: 3, pending: 4, dur: "2m", ctx: 0.19, agents: [] },
+      { name: "armada", wf: "armada-sync-nightly", id: "wf_44c8fa93", state: "running", chip: null, dot: "ok", expanded: false,
+        running: 1, pending: 0, dur: "40s", ctx: 0.12, agents: [] },
+      { name: "diolog-mobile", wf: "mobile-e2e-run3", id: "wf_7fe2b118", state: "completed", chip: "ok", dot: "ok", expanded: false,
+        done: 6, dur: "18m", ctx: 0.55, agents: [] },
     ],
   },
   empty: { online: true, quiet: false, summary: null, healthy: 1, runs: [] },
@@ -395,16 +428,39 @@ const TERM_ICON = `<svg viewBox="0 0 16 16" width="12" height="12" fill="none"><
 /* duration + a compact context-window meter, right-aligned, tabular, dim: the two live
    numbers that matter per row without adding a line. The meter warms toward amber as the
    context fills (a full context is the quiet reason an agent is about to derail). */
-function meta(dur, ctx) {
-  if (dur == null && ctx == null) return "";
+function meta(dur, ctx, tok) {
+  if (dur == null && ctx == null && tok == null) return "";
   let out = `<span class="meta">`;
   if (dur != null) out += `<span class="dur">${dur}</span>`;
+  if (tok != null) out += `<span class="dur" title="${tok.toLocaleString()} tokens in the context window">${tokfmt(tok)}</span>`;
   if (ctx != null) {
     const pct = Math.round(ctx * 100);
     const warm = ctx >= 0.85 ? "hot" : ctx >= 0.7 ? "warm" : "";
     out += `<span class="ctx ${warm}" title="Context window ${pct}% full"><span class="ctx-fill" style="width:${pct}%"></span></span>`;
   }
   return out + `</span>`;
+}
+
+/* a compact token count like "197k" / "1.2M" — the real context size the TUI shows. */
+function tokfmt(n) {
+  if (n >= 1_000_000) { const m = n / 1_000_000; return (m >= 10 ? m.toFixed(0) : m.toFixed(1)) + "M"; }
+  if (n >= 1_000) return Math.round(n / 1000) + "k";
+  return String(n);
+}
+
+/* the compact right-hand summary on a collapsed run row: how many agents are running vs
+   waiting to start, so the row says how much is going on without being opened. A finished
+   run shows its done count instead. This replaces the per-row context bars that cluttered
+   the list; the meters live inside the run once it's expanded. */
+function counts(run) {
+  if (run.state === "completed" || run.state === "completed-with-failures") {
+    return run.done != null ? `<span class="counts"><b>${run.done}</b> done</span>` : "";
+  }
+  const parts = [];
+  if (run.running != null) parts.push(`<b>${run.running}</b> running`);
+  if (run.pending) parts.push(`<b>${run.pending}</b> pending`);
+  if (!parts.length) return "";
+  return `<span class="counts">${parts.join(" · ")}</span>`;
 }
 
 /* per-agent state word tone: only failure and stall carry colour; the rest stay quiet
@@ -534,50 +590,55 @@ function render() {
     html += `<div class="runs">`;
     fx.runs.forEach((run, i) => {
       if (i > 0) html += `<div class="rundiv"></div>`;
-      html += `<div class="run"><div class="row" data-run="${i}">
-        <span class="chev sec">${run.expanded ? "▾" : "▸"}</span>
+      const open = !!run.expanded;
+      const done = run.state === "completed" || run.state === "completed-with-failures";
+      html += `<div class="run${open ? " expanded" : ""}${done ? " done" : ""}"><div class="row" data-run="${i}">
+        <span class="chev sec">${open ? "▾" : "▸"}</span>
         <span class="dot ${run.dot}"></span>
         <span class="run-names">
-          <span class="run-name">${run.wf || run.name}</span>
-          <span class="run-ws ter">${run.name}</span>
+          <span class="run-name">${run.name}</span>
+          <span class="run-ws sec">${run.wf || run.name}</span>
         </span>
-        <span class="chip ${run.chip}">${run.state}</span>
-        ${run.term ? `<button class="termbtn" data-term="${i}" title="Open the ${run.term} tab running this workflow">${TERM_ICON}</button>` : ""}
-        ${meta(run.dur, run.ctx)}
+        ${run.chip ? `<span class="chip ${run.chip}">${run.state}</span>` : ""}
+        ${open
+          ? `${run.term ? `<button class="termbtn" data-term="${i}" title="Open the ${run.term} tab running this workflow">${TERM_ICON}</button>` : ""}${meta(run.dur, run.ctx)}`
+          : counts(run)}
       </div>`;
-      // one calm activity line under the run: what the whole run is doing now.
-      if (run.note) {
-        html += `<div class="noteline ter">${run.note}</div>`;
-      }
-      // the caller: the top-level claude session that launched this run. Last line always
-      // shown (dim), click to see the last couple. Distinct from the run's own narrator.
-      if (run.caller && run.caller.length) {
-        html += `<div class="callerline" data-caller="${i}" title="Your Claude session that started this run">
-          <span class="caller-tag">your session</span>
-          <span class="caller-text">${run.caller[run.caller.length - 1]}</span></div>`;
-        if (run.callerOpen && run.caller.length > 1) {
-          html += `<div class="caller-more">${run.caller.slice(0, -1).map((l) => `<div>${l}</div>`).join("")}</div>`;
+      // everything below is detail — shown only for the one expanded run (accordion).
+      if (open) {
+        // the narrator + caller lines are long prose: show two lines, tap to expand to full.
+        if (run.note) {
+          html += `<div class="noteline sec${run.noteOpen ? " open" : ""}" data-note="${i}">${run.note}</div>`;
         }
-      }
-      if (run.expanded && run.agents.length) {
-        html += `<div class="agents">`;
-        run.agents.forEach((a, j) => {
-          const open = !!a.tailOpen;
-          html += `<div class="agent-block${open ? " open" : ""}">
-            <div class="agent" data-agent="${i}-${j}" title="Show recent output">
-              <span class="dot ${a.dot}"></span><span class="aname">${a.name}</span>
-              <span class="astate ${stateTone(a.state)}">${a.state}</span>
-              ${meta(a.dur, a.ctx)}
-              ${a.retry ? `<button class="btn primary" data-noexpand>Retry</button>` : ""}
-            </div>`;
-          if (a.tail && a.tail.length) {
-            html += tailPanel(a.tail, open, `agenttail-panel-${i}-${j}`);
-          }
-          html += `</div>`;
-        });
-        html += `</div><div class="runactions">
-          <button class="btn">Retry failed agents</button>
-          <button class="btn">Pause run</button></div>`;
+        // the caller: the claude session that launched this run. Last line by default; tap to
+        // expand to the full history. (No "your session" tag — it's a given.)
+        if (run.caller && run.caller.length) {
+          const body = run.callerOpen
+            ? run.caller.map((l) => `<div>${l}</div>`).join("")
+            : run.caller[run.caller.length - 1];
+          html += `<div class="callerline" data-caller="${i}" title="The Claude session that started this run">
+            <span class="caller-text${run.callerOpen ? " open" : ""}">${body}</span></div>`;
+        }
+        if (run.agents.length) {
+          html += `<div class="agents">`;
+          run.agents.forEach((a, j) => {
+            const aopen = !!a.tailOpen;
+            html += `<div class="agent-block${aopen ? " open" : ""}">
+              <div class="agent" data-agent="${i}-${j}" title="Show recent output">
+                <span class="dot ${a.dot}"></span><span class="aname">${a.name}</span>
+                <span class="astate ${stateTone(a.state)}">${a.state}</span>
+                ${meta(a.dur, a.ctx, a.tok)}
+                ${a.retry ? `<button class="btn primary" data-noexpand>Retry</button>` : ""}
+              </div>`;
+            if (a.tail && a.tail.length) {
+              html += tailPanel(a.tail, aopen, `agenttail-panel-${i}-${j}`);
+            }
+            html += `</div>`;
+          });
+          html += `</div><div class="runactions">
+            <button class="btn">Retry failed agents</button>
+            <button class="btn">Pause run</button></div>`;
+        }
       }
       html += `</div>`;
     });
@@ -590,11 +651,14 @@ function render() {
 
   content.innerHTML = html;
 
-  // expand/collapse a run
+  // expand/collapse a run — accordion: opening one closes the rest, and all start closed.
   content.querySelectorAll(".row[data-run]").forEach((row) => {
     row.addEventListener("click", () => {
-      const run = FIXTURES[ui.state].runs[Number(row.dataset.run)];
-      run.expanded = !run.expanded;
+      const runs = FIXTURES[ui.state].runs;
+      const idx = Number(row.dataset.run);
+      const wasOpen = !!runs[idx].expanded;
+      runs.forEach((r) => { r.expanded = false; });
+      runs[idx].expanded = !wasOpen;
       render();
     });
   });
@@ -608,7 +672,15 @@ function render() {
       a.tailOpen = !a.tailOpen; render();
     });
   });
-  // click the caller line -> show the last couple of lines from your claude session
+  // click the note line -> expand it to its full text
+  content.querySelectorAll(".noteline[data-note]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const run = FIXTURES[ui.state].runs[Number(el.dataset.note)];
+      run.noteOpen = !run.noteOpen; render();
+    });
+  });
+  // click the caller line -> show the full session history from your claude session
   content.querySelectorAll(".callerline[data-caller]").forEach((el) => {
     el.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -763,7 +835,7 @@ document.querySelectorAll(".devbar [data-appearance]").forEach((b) =>
   }));
 $("resetbtn").addEventListener("click", () => {
   ui = { state: "warning", appearance: "dark", open: false, mode: "popover", winPos: null };
-  FIXTURES.warning.runs[0].expanded = true;
+  FIXTURES.warning.runs.forEach((r) => { r.expanded = false; });
   document.querySelectorAll(".devbar [data-state]").forEach((x) => x.classList.toggle("active", x.dataset.state === "warning"));
   document.querySelectorAll(".devbar [data-appearance]").forEach((x) => x.classList.toggle("active", x.dataset.appearance === "dark"));
   render();
@@ -775,6 +847,10 @@ if (params.get("state")) ui.state = params.get("state");
 if (params.get("appearance")) ui.appearance = params.get("appearance");
 if (params.get("open") === "1") ui.open = true;
 if (params.get("mode") === "window") { ui.mode = "window"; ui.winPos = { x: innerWidth / 2 - 260, y: 120 }; }
+if (params.get("expand") != null && FIXTURES[ui.state] && FIXTURES[ui.state].runs) {
+  const ei = Number(params.get("expand"));
+  FIXTURES[ui.state].runs.forEach((r, k) => { r.expanded = k === ei; });
+}
 document.querySelectorAll(".devbar [data-state]").forEach((x) => x.classList.toggle("active", x.dataset.state === ui.state));
 document.querySelectorAll(".devbar [data-appearance]").forEach((x) => x.classList.toggle("active", x.dataset.appearance === ui.appearance));
 
