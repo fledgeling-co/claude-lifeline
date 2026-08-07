@@ -240,6 +240,10 @@ struct PopoverView: View {
                 if model.staleSeconds != nil && model.staleSeconds! > 30 {
                     staleBanner
                 }
+                // Project switcher — only when more than one project has active work.
+                if model.activeProjects.count > 1 {
+                    ProjectNav(model: model)
+                }
                 content
                 Divider()
                 footer
@@ -303,9 +307,10 @@ struct PopoverView: View {
 
     @ViewBuilder var content: some View {
         if let snap = model.snapshot, !snap.runs.isEmpty {
+            let runs = model.filteredRuns
             ScrollView {
                 VStack(spacing: 2) {
-                    ForEach(snap.runs) { run in
+                    ForEach(runs) { run in
                         RunRow(run: run, model: model)
                     }
                 }
@@ -314,7 +319,7 @@ struct PopoverView: View {
             // Size to content, capped so a long list scrolls internally. A forced MIN height
             // makes a short list's popover oversized, and macOS then shifts an oversized popover
             // up until its header clips behind the menu bar — so grow with content, don't pad.
-            .frame(maxHeight: inWindow ? .infinity : 600)
+            .frame(maxHeight: inWindow ? .infinity : 900)
             .opacity(model.daemonQuiet ? 0.55 : 1)
         } else {
             VStack(spacing: 4) {
@@ -349,6 +354,50 @@ struct PopoverView: View {
         }
         .font(.system(size: 11))
         .padding(EdgeInsets(top: 9, leading: 16, bottom: 9, trailing: 16))
+    }
+}
+
+/// Top nav: a pill per project with active work, plus "All". Tapping filters the run list to
+/// that project; a mint indicator slides between pills. The set of pills is driven by
+/// `model.activeProjects`, so it appears, grows and shrinks as projects gain and lose work.
+struct ProjectNav: View {
+    @ObservedObject var model: Model
+    @Namespace private var ns
+    // Selected-pill text: dark teal on mint (matches the app's primary buttons), clear contrast.
+    private let onMint = Color(red: 0.02, green: 0.19, blue: 0.16)
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 3) {
+                pill("All", key: nil)
+                ForEach(model.activeProjects, id: \.self) { p in pill(p, key: p) }
+            }
+            .padding(4)
+        }
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.06)))
+        .padding(.horizontal, 12).padding(.bottom, 8)
+    }
+
+    @ViewBuilder private func pill(_ label: String, key: String?) -> some View {
+        let selected = model.projectFilter == key
+        Button {
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { model.projectFilter = key }
+        } label: {
+            Text(label)
+                .font(.system(size: 12, weight: .medium)).lineLimit(1)
+                .padding(.horizontal, 11).padding(.vertical, 5)
+                .foregroundStyle(selected ? onMint : .secondary)
+                .background {
+                    if selected {
+                        RoundedRectangle(cornerRadius: 9).fill(Palette.mint)
+                            .matchedGeometryEffect(id: "nav-ind", in: ns)
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 9))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(key == nil ? "All projects" : "Show only \(label)")
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -402,14 +451,17 @@ struct RunRow: View {
     /// states that want a word: warning, recovering, completed, completed-with-failures.
     var showChip: Bool { run.state != "running" }
 
-    /// Title is the project (the repo/workspace the run works in); subtitle is the workflow.
+    /// The workflow is the title (the project now lives in the top nav).
     var titleText: String {
-        run.workspace ?? run.project.split(separator: "-").last.map(String.init) ?? run.project
+        run.workflowName ?? run.workspace ?? run.project.split(separator: "-").last.map(String.init) ?? run.project
     }
-    /// The workflow name beneath it; a short run id when the name isn't known yet (a live run
-    /// with no snapshot), so runs stay distinguishable rather than showing nothing.
+    /// Beneath it, the run's current activity (its narrator line) — what it's doing right now,
+    /// which is more useful than repeating the project. Hidden when expanded, where the full
+    /// (expandable) note shows below instead.
     var subtitleText: String? {
-        run.workflowName ?? String(run.runId.prefix(16))
+        if expanded { return nil }
+        if let note = run.note, !note.isEmpty { return note }
+        return nil
     }
 
     /// The compact right-hand summary on a collapsed row: how many agents are running vs
@@ -758,6 +810,8 @@ final class Model: ObservableObject {
     /// The one run currently expanded (accordion: at most one open at a time). nil = all
     /// collapsed, which is the initial state. Persisted here so a refresh can't change it.
     @Published var expandedRun: String? = nil
+    /// The selected project in the top nav (nil = All). Filters the run list.
+    @Published var projectFilter: String? = nil
     @Published var coreState: CoreState = .installed
     @Published var installStep: String = ""
     @Published var installProgress: Double = 0
@@ -872,6 +926,28 @@ final class Model: ObservableObject {
     var daemonQuiet: Bool { (staleSeconds ?? .infinity) > 30 }
     var health: Health { overallHealth(snapshot) }
 
+    /// The project (repo) a run belongs to — the top-nav groups by this.
+    func projectOf(_ run: StatusRun) -> String {
+        run.workspace ?? run.project.split(separator: "-").last.map(String.init) ?? run.project
+    }
+
+    /// Projects that currently have an ACTIVE workflow (a non-done run; the daemon already
+    /// keeps only runs recent within the hour). The top nav is built from this and updates as
+    /// projects gain or lose active work.
+    var activeProjects: [String] {
+        guard let snap = snapshot else { return [] }
+        var seen = Set<String>()
+        for r in snap.runs where !isDoneRun(r.state) { seen.insert(projectOf(r)) }
+        return seen.sorted() // stable order so the tabs don't reshuffle on each refresh
+    }
+
+    /// The runs shown after applying the top-nav project filter (nil = All).
+    var filteredRuns: [StatusRun] {
+        guard let snap = snapshot else { return [] }
+        guard let f = projectFilter else { return snap.runs }
+        return snap.runs.filter { projectOf($0) == f }
+    }
+
     var summaryLine: String {
         guard let snap = snapshot, !snap.runs.isEmpty else { return "Nothing tracked" }
         let active = snap.runs.filter { !isDoneRun($0.state) }
@@ -932,6 +1008,8 @@ final class Model: ObservableObject {
             let (snap, _) = Lifeline.readSnapshot()
             snapshot = snap
             lastMtime = mtime
+            // If the filtered project no longer has active work, fall back to All.
+            if let f = projectFilter, !activeProjects.contains(f) { projectFilter = nil }
         }
         // Stale age drives the quiet banner + icon tint. When hidden, only publish it across the
         // quiet threshold (so the icon flips once) rather than every second.

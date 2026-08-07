@@ -142,6 +142,12 @@
   .healthbar { display: flex; height: 3px; border-radius: 1.5px; overflow: hidden; margin-top: 6px; }
   .healthbar .good { background: #00C8B3; transition: width 0.4s ease; }
   .healthbar .bad  { background: rgba(255,141,40,0.9); transition: width 0.4s ease; }
+  /* project switcher: a pill per project with active work, "All" plus the projects */
+  .pnav { display: flex; gap: 3px; overflow-x: auto; padding: 4px; margin: 8px 12px; border-radius: 12px; }
+  .light .pnav { background: rgba(0,0,0,0.05); } .dark .pnav { background: rgba(255,255,255,0.06); }
+  .pnav-pill { flex: none; font-size: 12px; font-weight: 500; padding: 5px 11px; border-radius: 9px; white-space: nowrap; transition: background 0.2s ease, color 0.2s ease; }
+  .light .pnav-pill { color: rgba(0,0,0,0.5); } .dark .pnav-pill { color: rgba(255,255,255,0.55); }
+  .pnav-pill.on { background: #00C8B3; color: #06312A; font-weight: 600; }
   /* while installing, a continuous stripe travels the filled part so the bar reads as
      working even between the discrete steps. Stops (via .filled) when it completes. */
   .healthbar.installing .good::before {
@@ -485,7 +491,7 @@ function tailPanel(lines, open, panelId) {
 const $ = (id) => document.getElementById(id);
 const shell = $("shell"), arrow = $("arrow"), content = $("content"), statusitem = $("statusitem");
 
-let ui = { state: "warning", appearance: "dark", open: false, mode: "popover", winPos: null, learnOpen: false };
+let ui = { state: "warning", appearance: "dark", open: false, mode: "popover", winPos: null, learnOpen: false, projectFilter: null };
 
 /* ---------- render ---------- */
 function pulseSvg(cls, stroke, opacity, flat) {
@@ -587,17 +593,31 @@ function render() {
       <p class="sec">Start a workflow in Claude Code and it shows up here, watched.</p>
     </div>`;
   } else {
+    // project switcher: a pill per project with active (non-done) work, plus "All".
+    const activeProjects = [...new Set(fx.runs
+      .filter((r) => !(r.state === "completed" || r.state === "completed-with-failures"))
+      .map((r) => r.name))].sort();
+    if (activeProjects.length > 1) {
+      html += `<div class="pnav">` +
+        [`<button class="pnav-pill${ui.projectFilter == null ? " on" : ""}" data-proj="">All</button>`]
+          .concat(activeProjects.map((p) =>
+            `<button class="pnav-pill${ui.projectFilter === p ? " on" : ""}" data-proj="${p}">${p}</button>`))
+          .join("") + `</div>`;
+    }
     html += `<div class="runs">`;
+    let firstShown = true;
     fx.runs.forEach((run, i) => {
-      if (i > 0) html += `<div class="rundiv"></div>`;
+      if (ui.projectFilter && run.name !== ui.projectFilter) return;
+      if (!firstShown) html += `<div class="rundiv"></div>`;
+      firstShown = false;
       const open = !!run.expanded;
       const done = run.state === "completed" || run.state === "completed-with-failures";
       html += `<div class="run${open ? " expanded" : ""}${done ? " done" : ""}"><div class="row" data-run="${i}">
         <span class="chev sec">${open ? "▾" : "▸"}</span>
         <span class="dot ${run.dot}"></span>
         <span class="run-names">
-          <span class="run-name">${run.name}</span>
-          <span class="run-ws sec">${run.wf || run.name}</span>
+          <span class="run-name">${run.wf || run.name}</span>
+          ${!open && run.note ? `<span class="run-ws sec">${run.note}</span>` : ""}
         </span>
         ${run.chip ? `<span class="chip ${run.chip}">${run.state}</span>` : ""}
         ${open
@@ -651,6 +671,13 @@ function render() {
 
   content.innerHTML = html;
 
+  // project switcher: filter the run list to the chosen project (empty = All)
+  content.querySelectorAll(".pnav-pill[data-proj]").forEach((el) => {
+    el.addEventListener("click", () => {
+      ui.projectFilter = el.dataset.proj || null;
+      render();
+    });
+  });
   // expand/collapse a run — accordion: opening one closes the rest, and all start closed.
   content.querySelectorAll(".row[data-run]").forEach((row) => {
     row.addEventListener("click", () => {
