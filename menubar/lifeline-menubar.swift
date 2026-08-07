@@ -31,6 +31,8 @@ struct StatusRun: Decodable, Identifiable {
     var term: String?
     var tty: String?
     var callerTail: [String]?
+    var workflowName: String?
+    var workspace: String?
     var id: String { runId }
 }
 
@@ -337,8 +339,13 @@ struct RunRow: View {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 9)).foregroundStyle(.secondary).frame(width: 10)
                 Circle().fill(Vocab.runChip(run.state).color).frame(width: 8, height: 8)
-                Text(run.project.split(separator: "-").last.map(String.init) ?? run.project)
-                    .fontWeight(.semibold).lineLimit(1)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(run.workflowName ?? run.project.split(separator: "-").last.map(String.init) ?? run.project)
+                        .fontWeight(.semibold).lineLimit(1)
+                    if let ws = run.workspace ?? run.project.split(separator: "-").last.map(String.init), !ws.isEmpty {
+                        Text(ws).font(.system(size: 10)).foregroundStyle(.tertiary).lineLimit(1)
+                    }
+                }
                 let chip = Vocab.runChip(run.state)
                 Text(chip.text)
                     .font(.system(size: 10, weight: .semibold))

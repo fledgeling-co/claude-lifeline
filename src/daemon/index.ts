@@ -141,31 +141,36 @@ export function runDirOf(base: string, path: string): string | null {
 }
 
 /**
- * Discover workflow run directories touched within `windowMs`, WITHOUT holding a
- * filesystem watch handle. This is the daemon's primary discovery mechanism: a recursive
- * chokidar watch over the projects tree opens a handle per directory, and with 12k+
- * project directories that exhausts the (low, launchd-imposed) file-descriptor limit and
- * crash-loops the daemon (EMFILE) — the very kind of fragility lifeline exists to remove.
+ * Discover workflow run directories whose transcripts were written within `windowMs`,
+ * WITHOUT holding a filesystem watch handle (a recursive chokidar watch opens a handle per
+ * directory and EMFILEs against a 12k-dir tree — the fragility lifeline exists to remove).
  *
- * Directory mtimes make this cheap: a project/session directory's mtime only bumps when a
- * child is added or removed, and a live run touches its whole ancestor chain constantly.
- * So we descend only into branches whose mtime is inside the window, skipping the
- * thousands of static historical directories at the top level. Pure fs reads; testable
- * against a temp tree.
+ * Keyed off FILE mtimes, not directory mtimes. A directory's mtime only changes when a
+ * child is added or removed, NOT when a file inside it is appended to — so a live workflow
+ * that is appending to an existing journal.jsonl never bumps any ancestor directory mtime,
+ * and a dir-mtime scan misses it entirely (it would only ever catch the fan-out moment when
+ * a new agent file appears). We therefore stat the run's journal.jsonl + newest agent file.
+ *
+ * `projectPrefilterMs` is a cheap, generous pre-filter: a project directory's mtime bumps
+ * whenever a session is added to it, so an actively-used project has a recent mtime. This
+ * skips the thousands of ancient temp/scratch project dirs without statting their files. It
+ * is deliberately wide (default a week) so a workflow run in a resumed older session is
+ * still found; set it to 0 to scan every project.
  */
 export function discoverActiveRunDirs(
   base: string,
   windowMs: number,
   now: number,
+  projectPrefilterMs = 7 * 24 * 60 * 60 * 1000,
 ): string[] {
   const cutoff = now - windowMs;
   const out: string[] = [];
 
-  const recent = (dir: string): boolean => {
+  const mtime = (p: string): number => {
     try {
-      return statSync(dir).mtimeMs >= cutoff;
+      return statSync(p).mtimeMs;
     } catch {
-      return false;
+      return 0;
     }
   };
   const kids = (dir: string): string[] => {
@@ -177,15 +182,31 @@ export function discoverActiveRunDirs(
       return [];
     }
   };
+  /** Newest mtime among a run dir's journal + agent transcript files. */
+  const newestTranscriptMtime = (runDir: string): number => {
+    let newest = mtime(join(runDir, "journal.jsonl"));
+    try {
+      for (const f of readdirSync(runDir)) {
+        if (f.startsWith("agent-") && f.endsWith(".jsonl")) {
+          const m = mtime(join(runDir, f));
+          if (m > newest) newest = m;
+        }
+      }
+    } catch {
+      /* run dir vanished */
+    }
+    return newest;
+  };
 
+  const projectCutoff = projectPrefilterMs > 0 ? now - projectPrefilterMs : 0;
   for (const project of kids(base)) {
-    if (!recent(project)) continue; // whole project untouched in the window — skip its sessions
+    if (projectCutoff > 0 && mtime(project) < projectCutoff) continue; // ancient temp/scratch
     for (const session of kids(project)) {
-      if (!recent(session)) continue;
       const workflows = join(session, "subagents", "workflows");
-      if (!recent(workflows)) continue;
       for (const runDir of kids(workflows)) {
-        if (basename(runDir).startsWith("wf_") && recent(runDir)) out.push(runDir);
+        if (basename(runDir).startsWith("wf_") && newestTranscriptMtime(runDir) >= cutoff) {
+          out.push(runDir);
+        }
       }
     }
   }
@@ -235,6 +256,7 @@ export function startDaemon(
 
   let online = true;
   let lastConnectivityAt = 0;
+  let lastDiscoveryAt = 0;
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
 
@@ -518,6 +540,8 @@ export function startDaemon(
     return {
       runId: ledger.runId,
       project: ledger.project,
+      workflowName: run?.workflowName ?? null,
+      workspace: run?.workspace ?? null,
       state: computeRunState(views),
       agents,
       durationMs: run?.startedAtMs != null ? t - run.startedAtMs : null,
@@ -580,11 +604,23 @@ export function startDaemon(
     return working > 0 ? `${working} agent${working === 1 ? "" : "s"} working` : null;
   }
 
+  /** Newest transcript activity for a run, for sorting/capping the list. */
+  function lastActivityOf(runId: string): number {
+    const scanResult = scans.get(runId);
+    if (!scanResult) return 0;
+    return Math.max(scanResult.startedAtMs ?? 0, ...scanResult.agents.map((a) => a.lastTsMs ?? 0));
+  }
+
   function writeStatus(): void {
+    // Newest-active first, capped: the window shows recent work, not the whole history.
+    const runs = [...ledgers.values()]
+      .sort((a, b) => lastActivityOf(b.runId) - lastActivityOf(a.runId))
+      .slice(0, cfg.maxRunsShown)
+      .map(statusRunOf);
     const snapshot: StatusSnapshot = {
       updatedAt: now(),
       online,
-      runs: [...ledgers.values()].map(statusRunOf),
+      runs,
     };
     try {
       writeJsonAtomic(paths.status(), snapshot);
@@ -598,12 +634,16 @@ export function startDaemon(
   async function tick(): Promise<void> {
     if (stopped) return;
     try {
-      // Primary discovery: find run dirs touched since a bit before the last tick and
-      // mark them dirty. No persistent fs handles, so this cannot EMFILE regardless of
-      // how large the projects tree grows or how low the process fd limit is.
+      // Discovery: find run dirs whose transcripts changed within the window and mark them
+      // dirty. Keyed off file mtimes (a live run appends to existing files and never bumps
+      // any dir mtime), run on its own cadence because the walk is heavier than a tick. No
+      // persistent fs handles, so it cannot EMFILE regardless of tree size or fd limit.
       if (deps.watch !== false) {
-        const window = Math.max(cfg.daemonTickMs * 3, 30_000);
-        for (const runDir of discoverActiveRunDirs(base, window, now())) markDirty(runDir);
+        const t = now();
+        if (t - lastDiscoveryAt >= cfg.discoverIntervalMs) {
+          lastDiscoveryAt = t;
+          for (const runDir of discoverActiveRunDirs(base, cfg.discoverWindowMs, t)) markDirty(runDir);
+        }
       }
       for (const runDir of [...dirty]) {
         dirty.delete(runDir);
@@ -616,9 +656,32 @@ export function startDaemon(
       applyIntents();
       applyConnectivity();
       await driveRecoveries();
+      dropStaleRuns();
       writeStatus();
     } catch (err) {
       log.error("tick failed", String(err));
+    }
+  }
+
+  /**
+   * Drop a run from the live view once it's finished AND idle past the retention window, so
+   * the status window shows current work rather than growing without bound. A run with any
+   * non-terminal ledger entry (still recovering) is always kept.
+   */
+  function dropStaleRuns(): void {
+    const t = now();
+    for (const [runId, scanResult] of scans) {
+      const ledger = ledgers.get(runId);
+      const recovering = ledger && Object.values(ledger.entries).some((e) => !isTerminal(e.state));
+      if (recovering) continue;
+      const lastActivity = Math.max(
+        scanResult.startedAtMs ?? 0,
+        ...scanResult.agents.map((a) => a.lastTsMs ?? 0),
+      );
+      if (lastActivity > 0 && t - lastActivity > cfg.retentionMs) {
+        scans.delete(runId);
+        ledgers.delete(runId);
+      }
     }
   }
 
