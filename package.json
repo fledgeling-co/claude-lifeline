@@ -1,6 +1,6 @@
 {
   "name": "@fledgeling-co/claude-lifeline",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "A resilience and recovery layer for the Claude Code CLI's Workflow feature.",
   "type": "module",
   "license": "MIT",

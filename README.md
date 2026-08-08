@@ -124,6 +124,8 @@ Claude Code updates itself roughly every day. Because lifeline never edits that 
 
 On top of that, an automated check runs every day against each new Claude Code release, so if something ever does shift, it's usually caught before it would reach you at all.
 
+There's one thing lifeline does take over: the `claude` command itself. Claude Code can't repoint that the way it normally would when it updates, so lifeline resolves the newest version you've got every time you launch; the daily update still lands on its own, with nothing for you to do. If one's still downloading when you start, it runs the version you had a moment ago rather than a half-finished file, and `lifeline doctor` reports the version you last launched against the newest one installed, so it can never quietly fall behind.
+
 ## Install
 
 macOS, one line:
