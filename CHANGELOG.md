@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.0 (2026-08-09)
+
+The release that makes lifeline keep its main promise, and makes the status window readable at a glance.
+
+### Fixed
+
+- **Stalled agents were never recovered.** This is the big one. lifeline spotted an agent that had gone silent, worked out it was retryable, scheduled a retry, and then quietly dropped it. Silent loss is the whole reason this thing exists, so the one state that names it was the one state that could not be rescued. Found on a run whose agent had been dead for 91 minutes with a retry scheduled 12 minutes earlier. Nudging now happens, and because a retry is really a resume, an agent that turns out to be alive just carries on rather than doing its work twice.
+- A stalled agent is now shown straight away but left alone for half an hour before anything is done about it. Ten minutes of quiet is enough to tell you something looks stuck; it is not enough to be sure it is dead.
+- An agent that died on an API error and then had one more line written after it (an interrupt, say) was filed as merely quiet rather than lost, because that last line hid the error underneath. It gets looked past now.
+
+### Added
+
+- **Plain-language summaries.** Turn it on and each workflow gets a short title and a line saying where it is, like "waiting on 3 tasks", with a note on each agent saying what it is working on. It reads the recent output lifeline already has, and it does not ask again while nothing has changed, so an agent that is thinking rather than typing costs nothing. It uses your existing Claude login; there is no key to set up. **Off until you turn it on**, because it is the only part of lifeline that spends money.
+- The workflow's generated title now leads its row with the run id beside it, so you can still copy the id when you need it.
+- A settings menu behind the `···` button: the summaries switch, and how long finished workflows stay in the list. **Hide when finished** is one of the choices.
+- Expanding and collapsing a workflow is animated now, using the same movement as the rest of the window. With Reduce Motion on there is no movement at all, rather than a faster version of it.
+
+### Changed
+
+- If you route claude through your own proxy as well, lifeline now writes down what it is forwarding to, so your proxy can tell it is still in the chain and leave the routing alone instead of the two of them overwriting each other. There is a short section in the README about it.
+
 ## 0.3.1 (2026-08-08)
 
 A follow-up to 0.3.0. Everything here is a way the last release could quietly stop protecting you, found by reviewing it properly rather than by anyone hitting it.
