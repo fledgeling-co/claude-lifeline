@@ -126,6 +126,25 @@ On top of that, an automated check runs every day against each new Claude Code r
 
 There's one thing lifeline does take over: the `claude` command itself. Claude Code can't repoint that the way it normally would when it updates, so lifeline resolves the newest version you've got every time you launch; the daily update still lands on its own, with nothing for you to do. If one's still downloading when you start, it runs the version you had a moment ago rather than a half-finished file, and `lifeline doctor` reports the version you last launched against the newest one installed, so it can never quietly fall behind.
 
+## Sharing the routing with another proxy
+
+If you already route claude through something of your own (a multi-account proxy, a logger),
+lifeline chains in front of it rather than replacing it: `claude -> lifeline -> your proxy -> api`.
+Your proxy keeps doing its job and every header you set still reaches it.
+
+Both tools write the same key in `~/.claude/settings.json`, though, so whichever writes last wins
+and the routing can flap. To settle that, lifeline records what it chained to:
+
+```json
+"env": {
+  "ANTHROPIC_BASE_URL": "http://127.0.0.1:8787",
+  "LIFELINE_CHAINED_UPSTREAM": "http://127.0.0.1:8858"
+}
+```
+
+If your own tool sees its address in `LIFELINE_CHAINED_UPSTREAM`, it is still in the path and can
+leave the base URL alone. lifeline removes the key when you uninstall.
+
 ## Install
 
 macOS, one line:

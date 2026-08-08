@@ -93,7 +93,14 @@ if (mode === "apply") {
   if (recorded === undefined || (recorded === null && current !== null)) {
     writeJsonAtomic(RECORD, { original: current, recordedAt: Date.now() });
   }
+  // Publish what we are carrying. A sibling tool that also owns ANTHROPIC_BASE_URL (a
+  // multi-account proxy, say) otherwise has no way to tell "lifeline is chained in front of
+  // me" from "someone overwrote my routing", so it rewrites the key, lifeline heals it back,
+  // and the two fight forever with last-writer-wins. Seeing its OWN url here is proof it is
+  // still in the path, and its cue to stand down. Documented in the README.
   settings.env = { ...env, ANTHROPIC_BASE_URL: gatewayUrl };
+  if (current !== null) settings.env.LIFELINE_CHAINED_UPSTREAM = current;
+  else delete settings.env.LIFELINE_CHAINED_UPSTREAM;
   writeJsonAtomic(SETTINGS, settings);
   // Print what the gateway's upstream should now be: the value we just displaced. That is
   // the live routing, which is not always the recorded original (the user may have switched
@@ -107,6 +114,9 @@ if (mode === "apply") {
   const env = settings.env ?? {};
   if (original === null) delete env.ANTHROPIC_BASE_URL;
   else env.ANTHROPIC_BASE_URL = original;
+  // Ours, so it goes when we go — leaving it would tell a sibling tool that lifeline is still
+  // carrying it long after lifeline was removed.
+  delete env.LIFELINE_CHAINED_UPSTREAM;
   settings.env = env;
   writeJsonAtomic(SETTINGS, settings);
   console.log(original ?? "");
