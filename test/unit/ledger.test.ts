@@ -410,3 +410,62 @@ describe("policy defaults", () => {
     expect(next.nextRetryAt).toBe(NOW);
   });
 });
+
+/**
+ * Regression cover for the gap that made lifeline's headline promise silently untrue:
+ * `stateForClass` maps STALL to "stalled" and its comment says that state is "recovered by a
+ * scheduled relaunch (a nudge) like any retryable loss", but `dueEntries` admitted only
+ * "retrying" and "paused-usage-limit". Every stalled agent was therefore diagnosed, given a
+ * nextRetryAt, and dropped before planRecovery ever saw it. Observed in the field on a run
+ * whose agent had been dead for 91 minutes with a retry scheduled 12 minutes earlier.
+ */
+describe("dueEntries covers every recoverable state", () => {
+  function entry(over: Partial<LedgerEntry>): LedgerEntry {
+    return {
+      key: "k",
+      runId: "wf_1",
+      item: "DIO-0133",
+      agentId: "a1",
+      attempts: 1,
+      nextRetryAt: 1_000,
+      firstFailureAt: 0,
+      lastClass: "STALL",
+      lastError: "stalled 91m",
+      state: "stalled",
+      updatedAt: 0,
+      ...over,
+    } as LedgerEntry;
+  }
+  const ledgerOf = (...es: LedgerEntry[]) => ({
+    ...emptyLedger("wf_1", "-proj", "sess"),
+    entries: Object.fromEntries(es.map((e, i) => [`k${i}`, { ...e, key: `k${i}` }])),
+  });
+
+  it("returns a stalled entry whose retry is due", () => {
+    const due = dueEntries(ledgerOf(entry({})), 2_000);
+    expect(due).toHaveLength(1);
+    expect(due[0]?.state).toBe("stalled");
+  });
+
+  it("still returns retrying and usage-limit entries", () => {
+    const due = dueEntries(
+      ledgerOf(entry({ state: "retrying" }), entry({ state: "paused-usage-limit" })),
+      2_000,
+    );
+    expect(due.map((e) => e.state).sort()).toEqual(["paused-usage-limit", "retrying"]);
+  });
+
+  it("never returns a state that must not be blind-retried", () => {
+    const states: AgentState[] = ["done", "failed-terminal", "paused-manual", "paused-offline"];
+    const due = dueEntries(ledgerOf(...states.map((state) => entry({ state }))), 2_000);
+    expect(due).toEqual([]);
+  });
+
+  it("does not return a stalled entry before its retry time", () => {
+    expect(dueEntries(ledgerOf(entry({ nextRetryAt: 9_000 })), 2_000)).toEqual([]);
+  });
+
+  it("does not return a stalled entry with no retry scheduled", () => {
+    expect(dueEntries(ledgerOf(entry({ nextRetryAt: null })), 2_000)).toEqual([]);
+  });
+});

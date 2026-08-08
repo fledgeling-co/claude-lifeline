@@ -733,4 +733,24 @@ describe("recovery e2e", () => {
     const resumed = must(getEntry(must(loadLedger("wf_alpha"), "ledger"), KEY.alphaLost), "entry");
     expect(resumed.attempts).toBe(1);
   });
+
+  it("persists a run pause so later-discovered losses cannot restart it", async () => {
+    const alpha = writeAlpha(tmp.env.projects);
+    let clock = Date.now() + 60_000;
+    const daemon = start(testConfig(), { now: () => clock, watch: false });
+    daemon.markDirty(alpha.runDir);
+    await daemon.tick();
+
+    mkdirSync(paths.intentsDir(), { recursive: true });
+    writeFileSync(
+      join(paths.intentsDir(), `${clock}-run-pause.json`),
+      JSON.stringify({ id: "intent-run-pause", kind: "pause", target: { runId: "wf_alpha" }, createdAt: clock }),
+      "utf8",
+    );
+    await daemon.tick();
+
+    const ledger = must(loadLedger("wf_alpha"), "ledger");
+    expect(ledger.manualPauseAt).toBe(clock);
+    expect(Object.values(ledger.entries).every((entry) => entry.state === "paused-manual")).toBe(true);
+  });
 });

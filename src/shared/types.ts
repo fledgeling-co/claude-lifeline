@@ -56,6 +56,8 @@ export interface RunLedger {
   entries: Record<string, LedgerEntry>; // keyed by LedgerEntry.key
   /** Null until a resume has been launched; cleared only by newer transcript evidence. */
   recoveryLease?: RecoveryLease | null;
+  /** A run-scoped operator pause also applies to losses discovered after the pause. */
+  manualPauseAt?: number | null;
   createdAt: number;
   updatedAt: number;
 }

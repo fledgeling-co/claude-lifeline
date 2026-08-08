@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverActiveRunDirs, runDirOf } from "../../src/daemon/index.js";
+import { apiErrorFromTail } from "../../src/daemon/journal.js";
 
 /**
  * Discovery keys off the run's transcript FILE mtimes, not directory mtimes: a live
@@ -89,3 +90,47 @@ describe("discoverActiveRunDirs", () => {
     expect(runDirOf(b, "/b/proj/sess/other/file")).toBeNull();
   });
 });
+
+/**
+ * Regression cover for the masked API error. `apiErrorFromTail` walks the tail backwards for
+ * the newest API error and stops at the first ordinary line, on the sound principle that an
+ * agent which errored and then kept working is not lost. But a trailing line carrying no work
+ * counted as "kept working": on the real run below, an agent died on "API Error: Connection
+ * closed mid-response", an interrupt was recorded after it, and that single line hid the error.
+ * The agent was filed as merely stalled and took the slow path instead of CONN.
+ */
+describe("apiErrorFromTail sees past lines that carry no work", () => {
+  const err = JSON.stringify({
+    type: "assistant",
+    isApiErrorMessage: true,
+    message: { content: "API Error: Connection closed mid-response." },
+  });
+  const interrupted = JSON.stringify({
+    type: "user",
+    message: { content: [{ type: "text", text: "[Request interrupted by user]" }] },
+  });
+  const realWork = JSON.stringify({
+    type: "assistant",
+    message: { content: [{ type: "text", text: "Right, carrying on with the migration." }] },
+  });
+
+  it("finds the error beneath a trailing interrupt (the observed failure)", () => {
+    expect(apiErrorFromTail(`${err}\n${interrupted}\n`)).not.toBeNull();
+  });
+
+  it("finds it beneath several such lines", () => {
+    expect(apiErrorFromTail(`${err}\n${interrupted}\n${interrupted}\n`)).not.toBeNull();
+  });
+
+  it("still reports nothing when the agent genuinely recovered", () => {
+    expect(apiErrorFromTail(`${err}\n${realWork}\n`)).toBeNull();
+  });
+
+  it("does not invent an error from an interrupt alone", () => {
+    expect(apiErrorFromTail(`${realWork}\n${interrupted}\n`)).toBeNull();
+  });
+
+  it("finds a plain trailing error, as it always did", () => {
+    expect(apiErrorFromTail(`${realWork}\n${err}\n`)).not.toBeNull();
+  });
+})

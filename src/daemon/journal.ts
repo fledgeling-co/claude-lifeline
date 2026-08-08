@@ -489,10 +489,46 @@ export function apiErrorFromTail(tailText: string): ApiErrorSignature | null {
     }
     const sig = apiErrorFromLine(obj);
     if (sig) return sig;
-    // The newest parseable line is a normal message → the agent did not die on an API error.
+    // Trailing lines that carry no work are not evidence the agent recovered, so keep looking
+    // past them. Observed in the field: an agent died on "API Error: Connection closed
+    // mid-response", an interrupt was recorded after it, and that one line masked the error —
+    // the agent was filed as merely "stalled" and took the slow path instead of CONN.
+    if (isNonProgressLine(obj)) continue;
+    // Any other parseable line IS real work after the error, so the agent recovered on its own.
     return null;
   }
   return null;
+}
+
+/**
+ * A transcript line that records no progress: an interrupt, or an empty/whitespace-only
+ * message. Deliberately narrow — anything richer (an assistant turn, a tool result) means the
+ * agent kept working, which is exactly what must still stop the walk.
+ */
+export function isNonProgressLine(obj: unknown): boolean {
+  if (typeof obj !== "object" || obj === null) return false;
+  const text = messageTextOf(obj as Record<string, unknown>);
+  if (text === null) return false;
+  const t = text.trim().toLowerCase();
+  if (t.length === 0) return true;
+  return t.startsWith("[request interrupted") || t === "[no content]";
+}
+
+/** The plain text of a transcript line's message, whether string or content-block array. */
+function messageTextOf(obj: Record<string, unknown>): string | null {
+  const message = obj["message"];
+  if (typeof message !== "object" || message === null) return null;
+  const content = (message as Record<string, unknown>)["content"];
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  const parts: string[] = [];
+  for (const block of content) {
+    if (typeof block === "object" && block !== null) {
+      const bt = (block as Record<string, unknown>)["text"];
+      if (typeof bt === "string") parts.push(bt);
+    }
+  }
+  return parts.length > 0 ? parts.join(" ") : null;
 }
 
 /* ------------------------------------------------------------------ *

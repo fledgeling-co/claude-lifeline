@@ -314,6 +314,7 @@ export function startDaemon(
         result.lost.some((finding) => finding.mtimeMs > leaseStartedAt) ||
         result.stalled.some((finding) => finding.mtimeMs > leaseStartedAt));
     if (hasNewRecoveryEvidence) ledger = { ...ledger, recoveryLease: null, updatedAt: t };
+    const runIsManuallyPaused = ledger.manualPauseAt !== null && ledger.manualPauseAt !== undefined;
 
     for (const finding of result.lost) {
       const existing = getEntry(ledger, finding.key);
@@ -338,7 +339,11 @@ export function startDaemon(
         rng,
         lastError: finding.errorText,
       });
-      const parked = online ? updated : markPaused(updated, "paused-offline", t);
+      const parked = runIsManuallyPaused
+        ? markPaused(updated, "paused-manual", t)
+        : online
+          ? updated
+          : markPaused(updated, "paused-offline", t);
       ledger = upsertEntry(ledger, parked);
       log.info(
         `lost agent ${finding.agentId} (${finding.item ?? "?"}) ${finding.classification.class} -> ${parked.state}`,
@@ -352,6 +357,10 @@ export function startDaemon(
       const existing = getEntry(ledger, s.key);
       if (existing && existing.updatedAt >= s.mtimeMs) continue;
       if (existing && (isTerminal(existing.state) || existing.state === "paused-manual")) continue;
+      // Show it as stalled (the scan already does) but do not schedule a nudge until the
+      // silence has outlasted the grace. `stallWindowMs` answers "is this quiet?", which wants
+      // to be prompt; this answers "is this dead?", which wants to be sure.
+      if (s.quietForMs < cfg.stallGraceMs) continue;
       const seed =
         existing ??
         newEntry({ key: s.key, runId: result.runId, item: s.item, agentId: s.agentId, now: t });
@@ -366,7 +375,11 @@ export function startDaemon(
         rng,
         lastError: `stalled ${Math.round(s.quietForMs / 60000)}m`,
       });
-      const parked = online ? updated : markPaused(updated, "paused-offline", t);
+      const parked = runIsManuallyPaused
+        ? markPaused(updated, "paused-manual", t)
+        : online
+          ? updated
+          : markPaused(updated, "paused-offline", t);
       ledger = upsertEntry(ledger, parked);
       log.info(`stalled agent ${s.agentId} (${s.item ?? "?"}) -> ${parked.state}`, {
         run: result.runId,
@@ -421,6 +434,11 @@ export function startDaemon(
     }
     const wantAgent = intent.target.agentId ?? null;
     let next = ledger;
+    if (!wantAgent) {
+      // A run pause must cover agents discovered later as well as entries already in this
+      // ledger. Otherwise a rescan can defeat the operator's pause with a fresh retrying entry.
+      next = { ...next, manualPauseAt: intent.kind === "pause" ? t : null, updatedAt: t };
+    }
     for (const entry of Object.values(ledger.entries)) {
       if (wantAgent && entry.agentId !== wantAgent) continue;
       if (intent.kind === "pause") {

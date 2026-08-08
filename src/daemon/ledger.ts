@@ -58,6 +58,7 @@ export function emptyLedger(input: NewLedgerInput): RunLedger {
     args: input.args,
     entries: {},
     recoveryLease: null,
+    manualPauseAt: null,
     createdAt: input.now,
     updatedAt: input.now,
   };
@@ -233,10 +234,23 @@ export function markResumed(entry: LedgerEntry, when: number, now: number): Ledg
 }
 
 /** Entries whose schedule is due at `now` and whose state still wants an attempt. */
+/**
+ * `stalled` belongs here. `stateForClass` above states the contract plainly — a STALL is
+ * "recovered by a scheduled relaunch (a nudge) like any retryable loss" — but this filter
+ * used to admit only `retrying` and `paused-usage-limit`, so every stalled agent was
+ * diagnosed, given a `nextRetryAt`, and then silently dropped before `planRecovery` ever saw
+ * it. Silent loss is the failure lifeline exists to catch, so the one state that names it
+ * must not be the one state that cannot be recovered.
+ *
+ * The nudge is safe to fire at an agent that turns out to be alive: recovery resumes the RUN
+ * (`--resume` with `resumeFromRunId`), and the journal replays cached results, so only agents
+ * with no result re-run. `stallGraceMs` (applied where the entry is scheduled) is what keeps
+ * a merely-quiet agent from being nudged the moment it goes quiet.
+ */
 export function dueEntries(ledger: RunLedger, now: number): LedgerEntry[] {
   return Object.values(ledger.entries).filter(
     (e) =>
-      (e.state === "retrying" || e.state === "paused-usage-limit") &&
+      (e.state === "retrying" || e.state === "stalled" || e.state === "paused-usage-limit") &&
       e.nextRetryAt !== null &&
       e.nextRetryAt <= now,
   );

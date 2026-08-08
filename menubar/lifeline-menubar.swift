@@ -550,7 +550,9 @@ struct RunRow: View {
             .accessibilityAddTraits(.isButton)
             .accessibilityHint(expanded ? "Collapse" : "Expand")
 
-            // Everything below is detail — only for the one expanded run (accordion).
+            // Everything below is detail — only for the one expanded run (accordion). The
+            // transition pairs with Model.disclosure: the rows below reflow on the spring while
+            // this content fades in from the header rather than snapping in at full opacity.
             if expanded {
                 // The narrator line and the caller line are the run's live prose. They're long,
                 // so show a couple of lines and let a tap expand to the full text (no marquee —
@@ -925,11 +927,25 @@ final class Model: ObservableObject {
     }
 
     func toggleAgent(_ id: String) {
-        if expandedAgents.contains(id) { expandedAgents.remove(id) } else { expandedAgents.insert(id) }
+        withAnimation(Model.disclosure) {
+            if expandedAgents.contains(id) { expandedAgents.remove(id) } else { expandedAgents.insert(id) }
+        }
     }
     func toggleRun(_ id: String) {
         // Accordion: opening a run closes whichever was open; clicking the open one closes it.
-        expandedRun = (expandedRun == id) ? nil : id
+        // Animated so the close and the open read as one movement rather than two jumps.
+        withAnimation(Model.disclosure) {
+            expandedRun = (expandedRun == id) ? nil : id
+        }
+    }
+
+    /// The popover's one disclosure curve, matching the project-nav indicator so the window
+    /// moves in a single idiom. Nil under Reduce Motion: that setting asks for no movement, not
+    /// for faster movement, and `withAnimation(nil)` applies the change outright.
+    static var disclosure: Animation? {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            ? nil
+            : .spring(response: 0.34, dampingFraction: 0.82)
     }
     func isRunExpanded(_ id: String) -> Bool { expandedRun == id }
 

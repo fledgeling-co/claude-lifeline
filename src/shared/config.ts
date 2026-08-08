@@ -28,6 +28,13 @@ export interface LifelineConfig {
   liveWindowMs: number;
   /** No new output AND no context change for this long → the agent is stalled. */
   stallWindowMs: number;
+  /**
+   * How long an agent must stay stalled before a recovery nudge is SCHEDULED. Deliberately
+   * longer than `stallWindowMs`: that window decides when to SHOW an agent as stalled, which
+   * wants to be prompt, while this one decides when to act on it, which wants to be sure.
+   * Silence under this threshold is displayed and left alone.
+   */
+  stallGraceMs: number;
   /** The model context-window size, tokens, used to compute context-window fill. */
   contextLimitTokens: number;
   /** A run is "recently active" (and shown) if its transcripts changed within this window. */
@@ -53,6 +60,7 @@ export const DEFAULT_CONFIG: LifelineConfig = {
   probeUrl: "https://api.anthropic.com/v1/",
   liveWindowMs: 300_000,
   stallWindowMs: 600_000, // 10 minutes of no output/context change
+  stallGraceMs: 1_800_000, // ...but 30 minutes of it before we nudge the run
   contextLimitTokens: 200_000,
   discoverWindowMs: 3 * 60 * 60_000, // show workflow runs active in the last 3 hours
   discoverIntervalMs: 12_000, // full-tree discovery walk cadence
