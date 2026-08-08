@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1 (2026-08-09)
+
+### Fixed
+
+- **lifeline was restarting its own recovery daemon every time you ran claude.** The wrapper made sure the daemon was up using a command that kills it first, and that runs on every single launch, so on a machine with a few sessions open the thing doing the rescuing was being torn down every few seconds, dropping whatever it had in hand. It now starts the daemon only when it is not already running, which is all that line ever meant to do.
+
 ## 0.4.0 (2026-08-09)
 
 The release that makes lifeline keep its main promise, and makes the status window readable at a glance.
