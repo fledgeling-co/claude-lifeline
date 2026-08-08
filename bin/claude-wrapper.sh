@@ -154,8 +154,14 @@ fi
 
 # --- ensure the daemon is running --------------------------------------------------
 # Best-effort: never block or fail the user's claude invocation on lifeline's account.
+#
+# No `-k`. That flag KILLS a running job and starts it again, and this runs on every single
+# claude launch — so on a machine with several sessions the recovery daemon was being torn down
+# every few seconds, losing whatever it had in flight (a scheduled nudge, a summary mid-call)
+# and re-reading every ledger each time. Plain `kickstart` starts it if it is not running and
+# does nothing if it is, which is all "ensure the daemon is running" ever meant.
 if command -v launchctl >/dev/null 2>&1; then
-  launchctl kickstart -k "gui/$(id -u)/com.lifeline.daemon" >/dev/null 2>&1 || true
+  launchctl kickstart "gui/$(id -u)/com.lifeline.daemon" >/dev/null 2>&1 || true
 fi
 
 # --- keep claude routed through the gateway ----------------------------------------
