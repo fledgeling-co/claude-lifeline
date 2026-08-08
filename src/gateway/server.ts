@@ -20,6 +20,7 @@
  * forwarded through so Seam B (the daemon) owns them.
  */
 
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
 import type {
   IncomingHttpHeaders,
@@ -138,6 +139,82 @@ export function buildUpstreamUrl(upstream: string, requestUrl: string): string {
   const prefix = base.pathname.replace(/\/+$/, "");
   const rest = requestUrl.replace(/^\/+/, "");
   return new URL(`${prefix}/${rest}`, base.origin).toString();
+}
+
+/** A Relay bridge is intentionally narrower than "any local URL". */
+function loopbackPort(urlText: string): number | null {
+  try {
+    const url = new URL(urlText);
+    if (
+      url.protocol !== "http:" ||
+      url.hostname !== "127.0.0.1" ||
+      url.username ||
+      url.password ||
+      url.pathname !== "/" ||
+      url.search ||
+      url.hash
+    ) {
+      return null;
+    }
+    const port = Number(url.port);
+    return Number.isInteger(port) && port >= 1 && port <= 65_535 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Add the marker only when the configured upstream equals Relay's currently persisted port. */
+export function adoptRelayBridge(cfg: LifelineConfig, relayPort: number | null): LifelineConfig | null {
+  if (cfg.relayBridge || relayPort === null || loopbackPort(cfg.upstream) !== relayPort) return null;
+  return { ...cfg, relayBridge: { lastKnownPort: relayPort } };
+}
+
+/**
+ * Return a repaired Relay route only for an existing, positively identified Relay bridge.
+ * A stale marker cannot hijack another local service: its port must still equal the configured
+ * upstream before a new port is accepted.
+ */
+export function repairRelayBridge(cfg: LifelineConfig, relayPort: number | null): LifelineConfig | null {
+  const known = cfg.relayBridge?.lastKnownPort;
+  if (
+    !Number.isInteger(known) ||
+    known === undefined ||
+    relayPort === null ||
+    loopbackPort(cfg.upstream) !== known
+  ) {
+    return null;
+  }
+  if (relayPort === known) return null;
+  return {
+    ...cfg,
+    upstream: `http://127.0.0.1:${relayPort}`,
+    relayBridge: { lastKnownPort: relayPort },
+  };
+}
+
+/** Read Relay's UserDefaults value without a shell; malformed output is never trusted. */
+function readRelayPort(): number | null {
+  try {
+    const output = execFileSync(
+      "/usr/bin/defaults",
+      ["read", "dev.perch.app", "RELAY_PROXY_PORT"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+    if (!/^\d+$/.test(output)) return null;
+    const port = Number(output);
+    return Number.isSafeInteger(port) && port >= 1 && port <= 65_535 ? port : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistRelayBridge(cfg: LifelineConfig): void {
+  try {
+    writeJsonAtomic(paths.config(), cfg);
+  } catch {
+    // The request can still use the repaired in-memory route. Do not fail a model turn because
+    // the best-effort state write did not succeed.
+  }
 }
 
 /** The gateway's per-request backoff policy: 1s base, 60s cap, attempts + budget from config. */
@@ -474,10 +551,7 @@ async function handleRequest(
   ctx: GatewayContext,
 ): Promise<void> {
   const startedAt = Date.now();
-  const { cfg, log, policy } = ctx;
-  const upstreamBase = new URL(cfg.upstream);
-  const target = buildUpstreamUrl(cfg.upstream, req.url ?? "/");
-  const forwardHeaders = buildForwardHeaders(req.headers, upstreamBase.host);
+  const { log } = ctx;
   const method = (req.method ?? "GET") as Dispatcher.HttpMethod;
 
   let clientGone = false;
@@ -495,6 +569,14 @@ async function handleRequest(
 
   for (let attempt = 0; ; attempt++) {
     if (clientGone) return;
+
+    // The route may have been repaired after a previous connection refusal, so derive all
+    // upstream request details per attempt rather than pinning the stale URL before the loop.
+    const cfg = ctx.cfg;
+    const policy = ctx.policy;
+    const upstreamBase = new URL(cfg.upstream);
+    const target = buildUpstreamUrl(cfg.upstream, req.url ?? "/");
+    const forwardHeaders = buildForwardHeaders(req.headers, upstreamBase.host);
 
     const controller = new AbortController();
     const abortOnClose = (): void => controller.abort();
@@ -521,6 +603,14 @@ async function handleRequest(
       });
       if (classification.class === "CONN") {
         void ctx.connectivity.noteConnFailure(classification.reason);
+        const repaired = repairRelayBridge(ctx.cfg, readRelayPort());
+        if (repaired) {
+          ctx.cfg = repaired;
+          ctx.policy = gatewayPolicy(repaired);
+          persistRelayBridge(repaired);
+          log.warn("repaired Relay upstream after transport refusal", { port: repaired.relayBridge?.lastKnownPort });
+          continue;
+        }
       }
       const decision = shouldRetry(
         classification,
@@ -610,6 +700,15 @@ export interface GatewayHandle {
 }
 
 export async function startGateway(cfg: LifelineConfig = loadConfig()): Promise<GatewayHandle> {
+  // Do not override an explicit process-level upstream. For file-configured routes, adopt a
+  // bridge marker only after exact positive identification against Relay's own persisted port.
+  if (!process.env.LIFELINE_UPSTREAM) {
+    const adopted = adoptRelayBridge(cfg, readRelayPort());
+    if (adopted) {
+      cfg = adopted;
+      persistRelayBridge(cfg);
+    }
+  }
   const log = makeLogger("gateway");
   const connectivity = new ConnectivityWatcher(cfg, log);
   connectivity.start();

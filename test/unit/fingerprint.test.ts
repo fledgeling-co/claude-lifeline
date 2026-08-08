@@ -419,9 +419,6 @@ describe("waitForBinarySettle", () => {
         t += ms;
         return Promise.resolve();
       },
-      advance: (ms: number) => {
-        t += ms;
-      },
       at: () => t,
     };
   }
@@ -449,7 +446,7 @@ describe("waitForBinarySettle", () => {
   it("waits while the file is still being written, then settles once it goes quiet", async () => {
     const clock = fakeClock();
     // Mimics a download: mtime keeps pace with now until the writer stops.
-    let writingUntil = clock.at() + 4_000;
+    const writingUntil = clock.at() + 4_000;
     const outcome = await waitForBinarySettle(PATH, {
       stabilityMs: 5_000,
       pollMs: 500,
@@ -531,5 +528,30 @@ describe("checkInstalledVersion settles the binary before probing", () => {
     expect(result.settle).toBe("timeout");
     expect(result.compatible).toBe(false);
     expect(result.reason).toBe("contract-drift");
+  });
+
+  it("refuses to record a BASELINE from a binary that never settled", async () => {
+    // The inverse of the drift case above, and the more damaging one: with no baseline yet,
+    // blessing a half-written binary pins permanent false drift on a version that is fine.
+    writeFileSync(join(tmp.env.versions, VERSION), "binary", "utf8");
+
+    const result = await checkInstalledVersion(
+      deps(
+        {
+          versionsDir: () => tmp.env.versions,
+          waitForBinarySettle: () => Promise.resolve("timeout" as const),
+        },
+        markers({ workflow_agent: false }),
+      ),
+    );
+
+    expect(result.settle).toBe("timeout");
+    expect(result.reason).toBe("unsettled-no-baseline");
+    expect(existsSync(join(paths.fingerprintsDir(), `${VERSION}.json`))).toBe(false);
+
+    // And once it does settle, the real markers become the baseline.
+    const after = await checkInstalledVersion(deps({ versionsDir: () => tmp.env.versions }));
+    expect(after.reason).toBe("baseline-recorded");
+    expect(existsSync(join(paths.fingerprintsDir(), `${VERSION}.json`))).toBe(true);
   });
 });

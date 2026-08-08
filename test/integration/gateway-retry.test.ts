@@ -23,11 +23,13 @@ import {
   buildForwardHeaders,
   buildResponseHeaders,
   buildUpstreamUrl,
+  adoptRelayBridge,
   decodeErrorBody,
   extractErrorCode,
   extractErrorMessage,
   gatewayPolicy,
   headerValue,
+  repairRelayBridge,
   shouldRetry,
   startGateway,
 } from "../../src/gateway/server.js";
@@ -340,6 +342,20 @@ describe("gateway header and URL plumbing", () => {
     expect(buildUpstreamUrl("https://api.anthropic.com", "//evil.example/v1/messages")).toBe(
       "https://api.anthropic.com/evil.example/v1/messages",
     );
+  });
+
+  it("repairs only a positively identified Relay bridge after its port moves", () => {
+    const source = { ...DEFAULT_CONFIG, upstream: "http://127.0.0.1:8858" };
+    const adopted = must(adoptRelayBridge(source, 8858), "Relay bridge");
+    expect(adopted.relayBridge).toEqual({ lastKnownPort: 8858 });
+
+    const repaired = must(repairRelayBridge(adopted, 8859), "repaired Relay bridge");
+    expect(repaired.upstream).toBe("http://127.0.0.1:8859");
+    expect(repaired.relayBridge).toEqual({ lastKnownPort: 8859 });
+
+    // A generic local upstream is not a Relay bridge and therefore can never be rewritten.
+    expect(repairRelayBridge({ ...source, upstream: "http://127.0.0.1:9000" }, 8859)).toBeNull();
+    expect(repairRelayBridge({ ...adopted, upstream: "http://127.0.0.1:9000" }, 8859)).toBeNull();
   });
 
   it("headerValue takes the first value of a repeated header", () => {

@@ -501,6 +501,23 @@ export async function checkInstalledVersion(deps: FingerprintDeps = {}): Promise
   const baseline = stored ?? loadLatestFingerprint();
 
   if (baseline === null) {
+    // Never bless a read we know was unreliable. A timeout means the binary was STILL being
+    // written, so its markers are missing for a reason that has nothing to do with the
+    // contract — recording that as the baseline would pin permanent false drift on a version
+    // that is fine, which is the inverse of the bug the settle gate exists to prevent.
+    if (settle === "timeout") {
+      log.warn(`not recording a baseline for ${version}: the binary never settled`);
+      return {
+        version,
+        compatible: true,
+        drifted: [],
+        baseline: null,
+        current,
+        flag: null,
+        reason: "unsettled-no-baseline",
+        settle,
+      };
+    }
     saveFingerprint(current);
     clearIncompatFlag();
     log.info(`recorded contract baseline for ${version}`);

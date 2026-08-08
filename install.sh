@@ -52,14 +52,19 @@ elif [[ -n "${settings_base_url}" && "${settings_base_url}" != http://127.0.0.1:
   UPSTREAM="${settings_base_url}"
 elif [[ -n "${ANTHROPIC_BASE_URL:-}" && "${ANTHROPIC_BASE_URL}" != http://127.0.0.1:${GATEWAY_PORT}* ]]; then
   UPSTREAM="${ANTHROPIC_BASE_URL}"
-elif [[ -n "${existing_upstream}" && "${existing_upstream}" != http://127.0.0.1:${GATEWAY_PORT}* ]]; then
+elif [[ -n "${existing_upstream}" && "${existing_upstream}" != http://127.0.0.1:${GATEWAY_PORT}* \
+        && -n "${settings_base_url}" && "${settings_base_url}" == http://127.0.0.1:${GATEWAY_PORT}* ]]; then
+  # Only when settings.json ALREADY names the gateway, i.e. the case this branch exists for:
+  # the settings value can no longer tell us what sits behind it. Unconditionally trusting the
+  # recorded upstream would make it sticky — a user who removed their proxy could never get
+  # back to the plain API by re-running the installer.
   UPSTREAM="${existing_upstream}"
 else
   UPSTREAM="https://api.anthropic.com"
 fi
 LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
 LOCAL_BIN="$HOME/.local/bin"
-CLAUDE_VERSIONS_DIR="$HOME/.local/share/claude/versions"
+CLAUDE_VERSIONS_DIR="${LIFELINE_CLAUDE_VERSIONS_DIR:-$HOME/.local/share/claude/versions}"
 
 say()  { printf '\033[36mlifeline\033[0m %s\n' "$*"; }
 warn() { printf '\033[33mlifeline\033[0m %s\n' "$*" >&2; }
@@ -159,10 +164,19 @@ if [[ -e "${CLAUDE_LINK}" || -L "${CLAUDE_LINK}" ]]; then
   # Back up ONCE, and never back up our own wrapper. Re-running the installer used to
   # overwrite the genuine pre-lifeline launcher with a copy of the wrapper, leaving a
   # self-referential backup that uninstall would happily "restore".
+  #
+  # Refusing to overwrite is not enough on its own: anyone who re-ran an earlier installer
+  # ALREADY has that poisoned backup, and nothing else would ever repair it. So a backup that
+  # resolves to the wrapper is treated as absent.
+  bak="${LIFELINE_HOME}/claude.pre-lifeline.bak"
+  bak_target="$(readlink "${bak}" 2>/dev/null || true)"
+  if [[ "${bak_target}" == *"claude-wrapper.sh" ]]; then
+    rm -f "${bak}"
+    warn "discarded a previous backup that pointed at lifeline's own wrapper"
+  fi
   link_target="$(readlink "${CLAUDE_LINK}" 2>/dev/null || true)"
-  if [[ ! -e "${LIFELINE_HOME}/claude.pre-lifeline.bak" && ! -L "${LIFELINE_HOME}/claude.pre-lifeline.bak" \
-        && "${link_target}" != *"claude-wrapper.sh" ]]; then
-    cp -a "${CLAUDE_LINK}" "${LIFELINE_HOME}/claude.pre-lifeline.bak" 2>/dev/null || true
+  if [[ ! -e "${bak}" && ! -L "${bak}" && "${link_target}" != *"claude-wrapper.sh" ]]; then
+    cp -a "${CLAUDE_LINK}" "${bak}" 2>/dev/null || true
   fi
   rm -f "${CLAUDE_LINK}"
 fi

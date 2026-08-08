@@ -24,13 +24,36 @@
 set -euo pipefail
 
 LIFELINE_HOME="${LIFELINE_HOME:-$HOME/.lifeline}"
-GATEWAY_PORT="${LIFELINE_GATEWAY_PORT:-8787}"
-GATEWAY_URL="http://127.0.0.1:${GATEWAY_PORT}"
 VERSIONS_DIR="${LIFELINE_CLAUDE_VERSIONS_DIR:-$HOME/.local/share/claude/versions}"
+
+# The gateway's port comes from config.json — the file the gateway itself is configured from.
+# LIFELINE_GATEWAY_PORT is set in the gateway's launchd plist, not in an ordinary terminal, so
+# trusting the shell alone would invent :8787 for anyone who installed on another port: we would
+# then pin settings.json to a dead port AND hand the real gateway URL to the gateway as its own
+# upstream. An explicit value in the environment still wins, as an operator override.
+GATEWAY_PORT="${LIFELINE_GATEWAY_PORT:-}"
+if [[ -z "${GATEWAY_PORT}" && -f "${LIFELINE_HOME}/config.json" ]]; then
+  GATEWAY_PORT="$(sed -n 's/.*"gatewayPort"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' \
+    "${LIFELINE_HOME}/config.json" 2>/dev/null | head -1 || true)"
+fi
+[[ "${GATEWAY_PORT}" =~ ^[0-9]+$ ]] || GATEWAY_PORT=8787
+GATEWAY_URL="http://127.0.0.1:${GATEWAY_PORT}"
 
 # A version file is ~265MB and appears the moment its download starts, so "newest" can
 # name a half-written binary. A file nothing has touched for this long is finished.
+# Validated because it is expanded inside (( )), where a non-numeric value is a syntax error
+# at best and an arbitrary evaluated expression at worst.
 SETTLE_S="${LIFELINE_BINARY_SETTLE_S:-15}"
+[[ "${SETTLE_S}" =~ ^[0-9]+$ ]] || SETTLE_S=15
+
+# Compare two URLs the way a server would: case, trailing slashes and the localhost/127.0.0.1
+# spelling are all the same endpoint. Used to keep the gateway from becoming its own upstream.
+normalize_url() {
+  local u
+  u="$(printf '%s' "${1:-}" | tr -d '[:space:]' | tr 'A-Z' 'a-z')"
+  while [[ "${u}" == */ ]]; do u="${u%/}"; done
+  printf '%s' "${u//\/\/localhost:/\/\/127.0.0.1:}"
+}
 
 # --- locate the real signed binary -------------------------------------------------
 
@@ -46,7 +69,17 @@ installed_versions_desc() {
 # once the keys carry their own modifiers, which silently yields OLDEST-first.
 
 file_mtime() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0
+  local m
+  # GNU first: on GNU coreutils `-f` means --file-system, so `stat -f %m` SUCCEEDS there while
+  # printing a literal `%m`. A BSD-first chain therefore never reaches the `-c` fallback on
+  # Linux and feeds `%m` straight into (( )). BSD stat has no `-c`, so it errors and falls
+  # through here. Anything non-numeric is treated as "unknown, assume not settled yet".
+  m="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || true)"
+  # Fail closed: report NOW, so an age of 0 reads as "still changing" and the candidate is
+  # skipped. Reporting 0 (the epoch) would read as settled decades ago and do the opposite,
+  # exec'ing a file we could not even stat.
+  [[ "${m}" =~ ^[0-9]+$ ]] || m="$(date +%s)"
+  printf '%s\n' "${m}"
 }
 
 # The newest version that has stopped changing. Skipping unsettled candidates means an
@@ -57,7 +90,9 @@ newest_settled_version() {
   now="$(date +%s)"
   while IFS= read -r candidate; do
     path="${VERSIONS_DIR}/${candidate}"
-    [[ -n "${candidate}" && -x "${path}" ]] || continue
+    # -f as well as -x: a directory is executable (searchable) too, and exec'ing one fails
+    # with an error that never reaches the "could not locate the binary" guidance below.
+    [[ -n "${candidate}" && -f "${path}" && -x "${path}" ]] || continue
     if (( now - $(file_mtime "${path}") >= SETTLE_S )); then
       printf '%s\n' "${path}"
       return 0
@@ -72,18 +107,23 @@ if [[ -n "${LIFELINE_REAL_CLAUDE:-}" && -x "${LIFELINE_REAL_CLAUDE}" ]]; then
   real_claude="${LIFELINE_REAL_CLAUDE}"
 elif real_claude="$(newest_settled_version)"; then
   resolved_from_versions=1
-else
-  real_claude=""
 fi
+# No `else` arm: the command substitution above assigns whatever it printed, which on failure
+# is the empty string already.
 if [[ -z "${real_claude}" && -f "${LIFELINE_HOME}/real-claude" ]]; then
   candidate="$(cat "${LIFELINE_HOME}/real-claude" 2>/dev/null || true)"
-  [[ -n "${candidate}" && -x "${candidate}" ]] && real_claude="${candidate}"
+  [[ -n "${candidate}" && -f "${candidate}" && -x "${candidate}" ]] && real_claude="${candidate}"
 fi
 if [[ -z "${real_claude}" ]]; then
   # `|| true`: with `set -o pipefail`, grep matching nothing fails the whole pipeline,
   # and a failing assignment under `set -e` would take the script down with it.
   candidate="$(installed_versions_desc | head -1 || true)"
-  [[ -n "${candidate}" && -x "${VERSIONS_DIR}/${candidate}" ]] && real_claude="${VERSIONS_DIR}/${candidate}"
+  if [[ -n "${candidate}" && -f "${VERSIONS_DIR}/${candidate}" && -x "${VERSIONS_DIR}/${candidate}" ]]; then
+    real_claude="${VERSIONS_DIR}/${candidate}"
+    # Still a versions-dir resolution. Recording it is what stops `lifeline doctor` reporting
+    # a pin the wrapper is not doing, for the whole window in which nothing has settled yet.
+    resolved_from_versions=1
+  fi
 fi
 if [[ -z "${real_claude}" || ! -x "${real_claude}" ]]; then
   echo "lifeline: could not locate the real Claude Code binary; running without it is impossible." >&2
@@ -93,11 +133,23 @@ fi
 
 # Keep the recorded fallback pointing at the last version we actually launched, so step 3
 # is "last known good" rather than an install-day fossil — and so uninstall restores you
-# to a current binary. Only ever written from a versions-dir resolution: an npm or
-# homebrew install's recorded path must survive untouched.
-if (( resolved_from_versions )) \
-  && [[ "$(cat "${LIFELINE_HOME}/real-claude" 2>/dev/null || true)" != "${real_claude}" ]]; then
-  printf '%s\n' "${real_claude}" > "${LIFELINE_HOME}/real-claude" 2>/dev/null || true
+# to a current binary.
+#
+# Guarded on the RECORD, not just on how we resolved: a record pointing outside the versions
+# directory is an npm/homebrew install's own launcher (or a user's shim), it is the only copy
+# uninstall has, and a machine can have both that and a versions directory. Overwriting it
+# would make uninstall hand back a raw binary instead of the launcher the user had.
+if (( resolved_from_versions )); then
+  prev_record="$(cat "${LIFELINE_HOME}/real-claude" 2>/dev/null || true)"
+  if [[ ( -z "${prev_record}" || "${prev_record}" == "${VERSIONS_DIR}/"* ) \
+        && "${prev_record}" != "${real_claude}" ]]; then
+    # Write via a temp file: several sessions start together right after an update, and an
+    # interleaved truncating redirect leaves the record empty or two lines long.
+    if printf '%s\n' "${real_claude}" > "${LIFELINE_HOME}/real-claude.$$.tmp" 2>/dev/null; then
+      mv -f "${LIFELINE_HOME}/real-claude.$$.tmp" "${LIFELINE_HOME}/real-claude" 2>/dev/null \
+        || rm -f "${LIFELINE_HOME}/real-claude.$$.tmp" 2>/dev/null || true
+    fi
+  fi
 fi
 
 # --- ensure the daemon is running --------------------------------------------------
@@ -118,20 +170,51 @@ fi
 #   without one:     claude -> lifeline -> api
 #
 # Set LIFELINE_NO_SETTINGS_HEAL=1 to leave settings.json alone.
-CLAUDE_SETTINGS="${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+CLAUDE_SETTINGS="${LIFELINE_CLAUDE_SETTINGS:-$HOME/.claude/settings.json}"
+# Liveness means "something answered HTTP", NOT "answered 2xx". The gateway serves 404 at `/`
+# (it only proxies the API paths), and `curl -f` turns any 4xx into a non-zero exit — so an -f
+# probe reports a perfectly healthy gateway as dead. `lifeline doctor` has always counted the
+# 404 as proof of life; this now agrees with it. Exit 0 = a response arrived, 7 = refused.
+gateway_answers() { curl -sS -m 1 -o /dev/null "${GATEWAY_URL}/" >/dev/null 2>&1; }
+# `.` is the only regex metacharacter in a host:port URL, but an unescaped one would let
+# 127x0x0x1 match the gateway and skip a heal that was needed.
+gateway_url_ere="${GATEWAY_URL//./\\.}"
 heal_settings_chain() {
   [[ "${LIFELINE_NO_SETTINGS_HEAL:-0}" != "1" ]] || return 0
   [[ -f "${CLAUDE_SETTINGS}" && -f "${LIFELINE_HOME}/patch-settings.mjs" ]] || return 0
   command -v node >/dev/null 2>&1 || return 0
-  # Fast path: a settings file with no base URL needs nothing (our exported env wins), and
-  # one already naming the gateway is correct. Only the mismatch case pays for node.
+  # Fast path, cheap and deliberately one-sided. A settings file with no base URL at all needs
+  # nothing (our exported env wins), and the key already assigned the gateway is correct.
+  # Anything else falls through to the patcher, which compares URLs properly. The second
+  # pattern is anchored to the KEY rather than searching the whole file for the URL: a grep
+  # that misses a `localhost` spelling only costs a node start, whereas one that matched the
+  # gateway URL sitting under some other key would skip a heal that was needed.
   grep -q 'ANTHROPIC_BASE_URL' "${CLAUDE_SETTINGS}" || return 0
-  grep -qF "\"${GATEWAY_URL}\"" "${CLAUDE_SETTINGS}" && return 0
+  grep -qE '"ANTHROPIC_BASE_URL"[[:space:]]*:[[:space:]]*"'"${gateway_url_ere}"'/*"' \
+    "${CLAUDE_SETTINGS}" && return 0
+
+  # Only chain into a gateway that is actually answering. Unlike the per-process export below,
+  # this write is durable and outranks the environment, so pointing settings.json at a gateway
+  # that is down would take claude off the air until someone edited the file by hand — the
+  # opposite of the "a stopped gateway never breaks claude" property stated further down.
+  gateway_answers || return 0
 
   local displaced
-  displaced="$(LIFELINE_HOME="${LIFELINE_HOME}" CLAUDE_SETTINGS="${CLAUDE_SETTINGS}" \
+  displaced="$(LIFELINE_HOME="${LIFELINE_HOME}" LIFELINE_CLAUDE_SETTINGS="${CLAUDE_SETTINGS}" \
     node "${LIFELINE_HOME}/patch-settings.mjs" apply "${GATEWAY_URL}" 2>/dev/null || true)"
-  [[ -n "${displaced}" ]] || return 0
+  if [[ -z "${displaced}" ]]; then
+    # Nothing was displaced, but settings.json may still have been pinned to the gateway.
+    # Say so: silently editing the user's settings is the most surprising thing we do.
+    echo "lifeline: pinned settings.json to the gateway (${GATEWAY_URL})" >&2
+    return 0
+  fi
+
+  # Never let the gateway become its own upstream. The patcher normalises too; this is the
+  # second line of defence, because an upstream that resolves back to the listener turns one
+  # request into an unbounded chain of nested requests and takes claude down completely.
+  if [[ "$(normalize_url "${displaced}")" == "$(normalize_url "${GATEWAY_URL}")" ]]; then
+    return 0
+  fi
 
   # Point the gateway at what we displaced, and restart it ONLY if that actually changed:
   # a needless restart would cut in-flight requests from other claude sessions.
@@ -140,10 +223,25 @@ heal_settings_chain() {
     const fs = require("fs"), path = require("path");
     const p = path.join(process.env.LIFELINE_HOME, "config.json");
     const next = process.argv[1];
-    let cfg = {}; try { cfg = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
+    let raw = null;
+    try { raw = fs.readFileSync(p, "utf8"); } catch { raw = null; }
+    let cfg = {};
+    if (raw !== null) {
+      // A config we cannot parse is a config we must not REPLACE: writing {upstream} over it
+      // would drop gatewayHost, gatewayPort and every hand-tuned key, and loadConfig swallows
+      // the parse error and silently falls back to the plain API.
+      try { cfg = JSON.parse(raw); } catch { process.stdout.write("unreadable"); process.exit(0); }
+    }
     if (cfg.upstream === next) { process.stdout.write(""); }
-    else { cfg.upstream = next; fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
-           process.stdout.write("changed"); }
+    else {
+      cfg.upstream = next;
+      // Temp + rename: the gateway, daemon, watcher and CLI all read this file on their own
+      // schedule, and this now runs on every launch rather than once at install.
+      const tmp = p + "." + process.pid + ".tmp";
+      fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
+      fs.renameSync(tmp, p);
+      process.stdout.write("changed");
+    }
   ' "${displaced}" 2>/dev/null || true)"
 
   if [[ "${changed}" == "changed" ]] && command -v launchctl >/dev/null 2>&1; then
@@ -166,7 +264,7 @@ heal_settings_chain || true
 # bypasses the gateway's benefit (documented in the README).
 if [[ -n "${ANTHROPIC_BASE_URL:-}" && "${ANTHROPIC_BASE_URL}" != "${GATEWAY_URL}" ]]; then
   : # user has explicit routing — leave it alone
-elif curl -fsS -m 1 "${GATEWAY_URL}/" >/dev/null 2>&1; then
+elif gateway_answers; then
   export ANTHROPIC_BASE_URL="${GATEWAY_URL}"
 fi
 

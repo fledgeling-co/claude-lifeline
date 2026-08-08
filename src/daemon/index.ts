@@ -259,6 +259,10 @@ export function startDaemon(
   let lastDiscoveryAt = 0;
   let stopped = false;
   let timer: NodeJS.Timeout | null = null;
+  // `setInterval(() => void tick())` does not await an async callback. Without this guard a
+  // slow scan can overlap its successor, and both cycles can observe the same due entry before
+  // either one has re-armed it. One daemon therefore has exactly one state transition in flight.
+  let tickInFlight: Promise<void> | null = null;
 
   log.info(`watching ${base}`, { ledgers: ledgers.size, tickMs: cfg.daemonTickMs });
 
@@ -299,6 +303,17 @@ export function startDaemon(
       });
     // A run's script path only becomes known once the snapshot lands.
     if (!ledger.scriptPath && result.scriptPath) ledger = { ...ledger, scriptPath: result.scriptPath };
+
+    // A recovery lease is released only by newer evidence from the workflow. Re-reading the
+    // unchanged error tail must never count as evidence: it is the exact condition that formerly
+    // launched an unbounded fleet of identical `claude --resume` processes.
+    const leaseStartedAt = ledger.recoveryLease?.startedAt ?? null;
+    const hasNewRecoveryEvidence =
+      leaseStartedAt !== null &&
+      (result.resultKeys.includes(ledger.recoveryLease?.key ?? "") ||
+        result.lost.some((finding) => finding.mtimeMs > leaseStartedAt) ||
+        result.stalled.some((finding) => finding.mtimeMs > leaseStartedAt));
+    if (hasNewRecoveryEvidence) ledger = { ...ledger, recoveryLease: null, updatedAt: t };
 
     for (const finding of result.lost) {
       const existing = getEntry(ledger, finding.key);
@@ -461,30 +476,50 @@ export function startDaemon(
     for (const [runId, ledger] of ledgers) {
       const run = scans.get(runId);
       if (!run) continue;
-      for (const entry of dueEntries(ledger, t)) {
-        const finding = { key: entry.key, agentId: entry.agentId, item: entry.item };
-        const plan = planRecovery({ run, finding, entry, now: t });
-        if (!isDue(plan, t)) continue;
-        const repoKey = plan.cwd ?? plan.project;
-        await serializer.run(repoKey, () => {
-          const outcome: RelaunchOutcome = executeRelaunch(plan, deps.relaunch ?? {});
-          if (outcome.ok) {
-            log.info(`${plan.kind} ${plan.item ?? plan.agentId ?? plan.key.slice(0, 12)}`, {
-              run: runId,
-              attempt: plan.attempt,
-              pid: outcome.pid,
-            });
-          } else {
-            log.error(`relaunch failed: ${outcome.error}`, { run: runId, argv: outcome.argv });
-          }
+      // `--resume` re-dispatches the RUN, not just one lost agent. A durable run-level lease
+      // coalesces every due entry until that resume writes fresh transcript evidence.
+      if (ledger.recoveryLease) continue;
+      const entry = dueEntries(ledger, t)[0];
+      if (!entry) continue;
+      const finding = { key: entry.key, agentId: entry.agentId, item: entry.item };
+      const plan = planRecovery({ run, finding, entry, now: t });
+      if (!isDue(plan, t)) continue;
+
+      // Persist the lease BEFORE spawning. If launchd restarts this daemon between spawn and a
+      // later write, the reloaded ledger still refuses to duplicate the workflow.
+      const dispatched = upsertEntry(ledger, { ...entry, nextRetryAt: null, updatedAt: t });
+      let leased: RunLedger = {
+        ...dispatched,
+        recoveryLease: { key: entry.key, startedAt: t, pid: null },
+        updatedAt: t,
+      };
+      ledgers.set(runId, leased);
+      saveLedger(leased);
+
+      const repoKey = plan.cwd ?? plan.project;
+      const outcome: RelaunchOutcome = await serializer.run(repoKey, () =>
+        executeRelaunch(plan, deps.relaunch ?? {}),
+      );
+      if (outcome.ok) {
+        leased = {
+          ...leased,
+          recoveryLease: { key: entry.key, startedAt: t, pid: outcome.pid },
+        };
+        ledgers.set(runId, leased);
+        saveLedger(leased);
+        log.info(`${plan.kind} ${plan.item ?? plan.agentId ?? plan.key.slice(0, 12)}`, {
+          run: runId,
+          attempt: plan.attempt,
+          pid: outcome.pid,
         });
-        // Book the next probe rather than clearing the schedule: a usage-limit park must keep
-        // probing so it picks up whichever proxy account frees first. This does not count a
-        // new failure — only a newer transcript does.
+      } else {
+        // A failed spawn did not start work, so remove the lease and retain the bounded retry
+        // schedule. This is the only case in which the same transcript may be retried blindly.
         const rearmed = rearmAfterAttempt(entry, cfg.recovery, t, { rng });
-        const next = upsertEntry(ledgers.get(runId) ?? ledger, rearmed);
+        const next = upsertEntry({ ...leased, recoveryLease: null }, rearmed);
         ledgers.set(runId, next);
         saveLedger(next);
+        log.error(`relaunch failed: ${outcome.error}`, { run: runId, argv: outcome.argv });
       }
     }
   }
@@ -664,7 +699,7 @@ export function startDaemon(
 
   /* ---------------- the cycle ---------------- */
 
-  async function tick(): Promise<void> {
+  async function runTick(): Promise<void> {
     if (stopped) return;
     try {
       // Discovery: find run dirs whose transcripts changed within the window and mark them
@@ -694,6 +729,17 @@ export function startDaemon(
     } catch (err) {
       log.error("tick failed", String(err));
     }
+  }
+
+  function tick(): Promise<void> {
+    if (stopped) return Promise.resolve();
+    if (tickInFlight) return tickInFlight;
+    let cycle: Promise<void>;
+    cycle = runTick().finally(() => {
+      if (tickInFlight === cycle) tickInFlight = null;
+    });
+    tickInFlight = cycle;
+    return cycle;
   }
 
   /**

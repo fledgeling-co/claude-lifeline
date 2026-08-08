@@ -9,6 +9,11 @@ export interface LifelineConfig {
   gatewayPort: number;
   /** Upstream the gateway forwards to (the real API, or the user's multi-account proxy). */
   upstream: string;
+  /**
+   * Present only after the gateway positively identified its upstream as Relay. It makes a
+   * Relay port move self-healing without ever redirecting an arbitrary localhost proxy.
+   */
+  relayBridge?: { lastKnownPort: number } | null;
   /** Per-request wall-clock budget for in-gateway retries, ms. Keeps under the SDK timeout. */
   requestBudgetMs: number;
   /** Max retry attempts the gateway itself makes within one request. */

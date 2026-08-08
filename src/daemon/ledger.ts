@@ -57,6 +57,7 @@ export function emptyLedger(input: NewLedgerInput): RunLedger {
     scriptPath: input.scriptPath,
     args: input.args,
     entries: {},
+    recoveryLease: null,
     createdAt: input.now,
     updatedAt: input.now,
   };

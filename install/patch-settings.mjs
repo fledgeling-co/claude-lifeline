@@ -9,19 +9,44 @@
  *
  *   node patch-settings.mjs apply  <gatewayUrl>   prints the displaced value (or "")
  *   node patch-settings.mjs revert                restores the recorded original
- *   node patch-settings.mjs current               prints the live settings value (or "")
  *
  * `apply` is safe to re-run: it chains only when the setting has drifted off the gateway,
  * which is what makes it usable as a self-heal from the launch wrapper as well as at install.
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync, copyFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 // Overridable so the launch-time heal can be exercised against a scratch settings file.
-const SETTINGS = process.env.CLAUDE_SETTINGS ?? join(homedir(), ".claude", "settings.json");
+// Namespaced: an un-prefixed CLAUDE_SETTINGS reads like a variable Claude Code owns, and this
+// one aims a file mutation, so a collision would write ANTHROPIC_BASE_URL into someone else's
+// JSON and record ITS value as the thing to restore at uninstall.
+const SETTINGS = process.env.LIFELINE_CLAUDE_SETTINGS ?? join(homedir(), ".claude", "settings.json");
 const LIFELINE_HOME = process.env.LIFELINE_HOME ?? join(homedir(), ".lifeline");
 const RECORD = join(LIFELINE_HOME, "settings-base-url.orig.json");
+
+/**
+ * Compare two URLs the way a server would. A trailing slash, a capital letter, stray
+ * whitespace or the `localhost` spelling all name the SAME endpoint — and treating one of
+ * those as a foreign proxy is how the gateway ends up chained to itself, forwarding every
+ * request back into its own listener.
+ */
+function sameEndpoint(a, b) {
+  const norm = (u) =>
+    String(u ?? "")
+      .replace(/\s+/g, "")
+      .toLowerCase()
+      .replace(/\/+$/, "")
+      .replace("//localhost:", "//127.0.0.1:");
+  return norm(a) === norm(b);
+}
+
+/** Write JSON via a temp file: readers must never observe a truncated settings.json. */
+function writeJsonAtomic(path, value) {
+  const tmp = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n");
+  renameSync(tmp, path);
+}
 
 function loadSettings() {
   try {
@@ -41,12 +66,6 @@ function readRecordedOriginal() {
 
 const [mode, gatewayUrl] = process.argv.slice(2);
 
-if (mode === "current") {
-  const settings = loadSettings();
-  console.log(settings?.env?.ANTHROPIC_BASE_URL ?? "");
-  process.exit(0);
-}
-
 if (mode === "apply") {
   if (!gatewayUrl) {
     console.error("usage: patch-settings.mjs apply <gatewayUrl>");
@@ -56,7 +75,7 @@ if (mode === "apply") {
   if (!settings) process.exit(0); // no settings file — nothing to chain
   const env = settings.env ?? {};
   const current = env.ANTHROPIC_BASE_URL ?? null;
-  if (current === gatewayUrl) {
+  if (current !== null && sameEndpoint(current, gatewayUrl)) {
     console.log(readRecordedOriginal() ?? "");
     process.exit(0); // already chained (idempotent re-install)
   }
@@ -66,11 +85,16 @@ if (mode === "apply") {
   // to restore how it was, and "how it was" is whatever we saw first.
   const backup = join(LIFELINE_HOME, "settings.json.pre-lifeline.bak");
   if (!existsSync(backup)) copyFileSync(SETTINGS, backup);
-  if (!existsSync(RECORD)) {
-    writeFileSync(RECORD, JSON.stringify({ original: current, recordedAt: Date.now() }, null, 2));
+  // The one exception to record-once: a record saying "there was nothing here" is not
+  // evidence about a value the user set LATER. Without this upgrade, uninstall reads
+  // original:null and DELETES a proxy added after install, whose only other copy is the
+  // config.json it then tells the user to remove.
+  const recorded = existsSync(RECORD) ? readRecordedOriginal() : undefined;
+  if (recorded === undefined || (recorded === null && current !== null)) {
+    writeJsonAtomic(RECORD, { original: current, recordedAt: Date.now() });
   }
   settings.env = { ...env, ANTHROPIC_BASE_URL: gatewayUrl };
-  writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + "\n");
+  writeJsonAtomic(SETTINGS, settings);
   // Print what the gateway's upstream should now be: the value we just displaced. That is
   // the live routing, which is not always the recorded original (the user may have switched
   // proxies since install).
@@ -84,7 +108,7 @@ if (mode === "apply") {
   if (original === null) delete env.ANTHROPIC_BASE_URL;
   else env.ANTHROPIC_BASE_URL = original;
   settings.env = env;
-  writeFileSync(SETTINGS, JSON.stringify(settings, null, 2) + "\n");
+  writeJsonAtomic(SETTINGS, settings);
   console.log(original ?? "");
 } else {
   console.error("usage: patch-settings.mjs apply <gatewayUrl> | revert");

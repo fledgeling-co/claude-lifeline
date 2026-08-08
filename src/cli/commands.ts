@@ -74,10 +74,41 @@ export interface CommandDeps {
 export interface ClaudeVersionCheck {
   /** The version the wrapper resolves at launch, or null when it cannot be determined. */
   active: string | null;
-  /** The newest version present on disk, or null when there is no versions directory. */
+  /**
+   * The newest version the WRAPPER would launch, or null when there is no versions directory
+   * (a non-standard npm/homebrew install, which has nothing to fall behind).
+   */
   newest: string | null;
-  /** True for a non-standard install (npm/homebrew): no versions dir to fall behind. */
-  unmanaged: boolean;
+}
+
+/**
+ * How long a version file must have been untouched before the wrapper will launch it. Mirrors
+ * `SETTLE_S` in bin/claude-wrapper.sh: doctor has to judge what the wrapper would ACTUALLY
+ * pick, and the wrapper deliberately skips a version whose ~265MB download is still landing.
+ * Counting one of those as "newest" produces a "lifeline is holding you back" warning that
+ * running claude cannot clear, because not launching it is the correct behaviour.
+ */
+const LAUNCHABLE_SETTLE_MS = 15_000;
+
+/**
+ * The wrapper lets `LIFELINE_BINARY_SETTLE_S` override its threshold, so doctor honours the same
+ * variable. Hardcoding 15s here would make doctor disagree with the wrapper for exactly the user
+ * who cared enough to tune it — and disagreeing is the one thing this check must not do.
+ */
+function launchableSettleMs(env: NodeJS.ProcessEnv): number {
+  const raw = env.LIFELINE_BINARY_SETTLE_S;
+  if (raw != null && /^\d+$/.test(raw.trim())) return Number(raw.trim()) * 1000;
+  return LAUNCHABLE_SETTLE_MS;
+}
+
+/**
+ * The wrapper filters versions with `^[0-9]+(\.[0-9]+)*$`, which is narrower than the
+ * fingerprint module's `isVersionName` (that one also accepts `-rc.1` style suffixes). Doctor
+ * must use the wrapper's vocabulary: reporting a prerelease as "newest" would accuse the
+ * wrapper of pinning when it is simply declining to launch a name it cannot order.
+ */
+function isLaunchableVersionName(name: string): boolean {
+  return isVersionName(name) && /^[0-9]+(\.[0-9]+)*$/.test(name);
 }
 
 /* ------------------------------------------------------------- default deps */
@@ -182,10 +213,20 @@ export function defaultDeps(): CommandDeps {
  * pinning an old binary, which is exactly the failure this check exists to make loud.
  */
 function defaultCheckClaudeVersion(): ClaudeVersionCheck {
+  const dir = claudeVersionsDir();
+  const settledBefore = Date.now() - launchableSettleMs(process.env);
   let versions: string[] = [];
   try {
-    versions = readdirSync(claudeVersionsDir())
-      .filter(isVersionName)
+    versions = readdirSync(dir)
+      .filter(isLaunchableVersionName)
+      .filter((name) => {
+        try {
+          const st = statSync(join(dir, name));
+          return st.isFile() && st.mtimeMs <= settledBefore;
+        } catch {
+          return false;
+        }
+      })
       .sort((a, b) => compareVersions(b, a));
   } catch {
     versions = [];
@@ -197,21 +238,22 @@ function defaultCheckClaudeVersion(): ClaudeVersionCheck {
     const recorded = readFileSync(join(paths.home(), "real-claude"), "utf8").trim();
     if (recorded !== "") {
       const base = basename(recorded);
-      active = isVersionName(base) ? base : null;
+      active = isLaunchableVersionName(base) ? base : null;
     }
   } catch {
     // No record yet — claude has not been launched through the wrapper.
   }
 
-  return { active, newest, unmanaged: newest === null };
+  return { active, newest };
 }
 
 /** Read-only and tolerant: an unreadable or malformed settings file simply has no base URL. */
 function defaultReadSettingsBaseUrl(): string | null {
+  // Same override the wrapper and the patcher honour, so all three read one file.
+  const settingsPath =
+    process.env.LIFELINE_CLAUDE_SETTINGS ?? join(homedir(), ".claude", "settings.json");
   try {
-    const raw: unknown = JSON.parse(
-      readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"),
-    );
+    const raw: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
     if (typeof raw !== "object" || raw === null) return null;
     const env = (raw as { env?: unknown }).env;
     if (typeof env !== "object" || env === null) return null;
@@ -409,13 +451,24 @@ export function baseUrlVerdict(
   if (normalizeUrl(effective) === normalizeUrl(gateway)) {
     return { level: "ok", detail: `routed through the gateway via ${via} (upstream ${upstream})` };
   }
-  // A warning, not a failure: the wrapper re-chains this at the next launch, so it is a
-  // transient state with a known repair rather than something the user must go and fix.
+  // A settings.json bypass is a warning, not a failure: the wrapper re-chains it at the next
+  // launch, so it is a transient state with a known repair. A SHELL bypass is different — the
+  // wrapper deliberately leaves an explicitly exported base URL alone ("that routing is user
+  // intent"), so nothing will ever repair it and saying otherwise would send the user away
+  // waiting for a heal that is not coming.
+  if (sources.settings != null) {
+    return {
+      level: "warn",
+      detail:
+        `settings.json points at ${effective}, not the gateway (${gateway}), so claude is bypassing lifeline; ` +
+        `launching claude re-chains it and makes ${effective} the upstream`,
+    };
+  }
   return {
     level: "warn",
     detail:
-      `${via} points at ${effective}, not the gateway (${gateway}), so claude is bypassing lifeline; ` +
-      `launching claude re-chains it and makes ${effective} the upstream`,
+      `this shell exports ${effective}, not the gateway (${gateway}), so claude is bypassing lifeline; ` +
+      `lifeline leaves an explicitly exported base URL alone — unset it, or set it to ${gateway}, to route through lifeline`,
   };
 }
 
@@ -427,16 +480,16 @@ export function baseUrlVerdict(
 export function claudeVersionVerdict(
   check: ClaudeVersionCheck,
 ): { level: CheckLevel; detail: string } {
-  if (check.unmanaged) {
+  if (check.newest === null) {
     return { level: "ok", detail: "no versions directory — non-standard install, nothing to track" };
   }
   if (check.active === null) {
     return {
       level: "ok",
-      detail: `newest installed is ${check.newest ?? "unknown"}; claude has not been launched through lifeline yet`,
+      detail: `newest installed is ${check.newest}; claude has not been launched through lifeline yet`,
     };
   }
-  if (check.newest === null || compareVersions(check.active, check.newest) >= 0) {
+  if (compareVersions(check.active, check.newest) >= 0) {
     return { level: "ok", detail: `running ${check.active} (newest installed)` };
   }
   return {
@@ -476,7 +529,7 @@ export async function doctorCommand(deps: CommandDeps = defaultDeps()): Promise<
     ...baseUrlVerdict(
       { settings: deps.readSettingsBaseUrl(), shell: deps.env.ANTHROPIC_BASE_URL ?? null },
       url,
-      deps.config().upstream,
+      cfg.upstream,
     ),
   });
 

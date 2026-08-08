@@ -34,6 +34,19 @@ export interface LedgerEntry {
   updatedAt: number;
 }
 
+/**
+ * A whole-workflow resume that has been dispatched and is awaiting transcript evidence.
+ *
+ * Recovery resumes a workflow run, not an individual agent.  Keeping this lease on the run
+ * prevents every stale lost-agent record (and overlapping daemon ticks) from launching the same
+ * `claude --resume` workflow again.
+ */
+export interface RecoveryLease {
+  key: string;
+  startedAt: number;
+  pid: number | null;
+}
+
 export interface RunLedger {
   runId: string;
   project: string;
@@ -41,6 +54,8 @@ export interface RunLedger {
   scriptPath: string | null;
   args: unknown;
   entries: Record<string, LedgerEntry>; // keyed by LedgerEntry.key
+  /** Null until a resume has been launched; cleared only by newer transcript evidence. */
+  recoveryLease?: RecoveryLease | null;
   createdAt: number;
   updatedAt: number;
 }

@@ -368,8 +368,37 @@ describe("recovery e2e", () => {
     const afterThird = must(loadLedger("wf_alpha"), "ledger after third tick");
     const stable = must(getEntry(afterThird, KEY.alphaLost), "ledger entry");
     expect(stable.attempts).toBe(1); // no new failure was observed, so no new attempt counted
-    expect(calls).toHaveLength(1); // and the rearmed schedule is not yet due again
-    expect(stable.nextRetryAt).toBe(clock + 500); // attempt 1 -> ceiling 2000 -> 0.25
+    expect(calls).toHaveLength(1); // the run lease suppresses duplicate workflow resumes
+    expect(stable.nextRetryAt).toBeNull();
+    expect(afterThird.recoveryLease?.key).toBe(KEY.alphaLost);
+  });
+
+  it("coalesces concurrent ticks and unchanged failures into one workflow resume", async () => {
+    writeAlpha(tmp.env.projects);
+    const alphaDir = join(tmp.env.projects, PROJECT, SESSION, "subagents", "workflows", "wf_alpha");
+    const { fn: spawn, calls } = recordingSpawn();
+    let clock = Date.now() + 60_000;
+    const daemon = start(testConfig(), {
+      now: () => clock,
+      rng: () => 0,
+      watch: false,
+      relaunch: { spawn, command: "claude-stub" },
+    });
+
+    daemon.markDirty(alphaDir);
+    await daemon.tick(); // detect and schedule the lost agent
+    clock += 1_000;
+    daemon.markDirty(alphaDir);
+    await Promise.all([daemon.tick(), daemon.tick()]);
+    expect(calls).toHaveLength(1);
+
+    // The failure tail did not change. Even long after its former retry deadline, the durable
+    // run lease waits for fresh transcript evidence instead of starting another whole workflow.
+    clock += 60_000;
+    daemon.markDirty(alphaDir);
+    await daemon.tick();
+    expect(calls).toHaveLength(1);
+    expect(must(loadLedger("wf_alpha"), "ledger").recoveryLease?.pid).toBe(4243);
   });
 
   it("survives a daemon restart: the ledger reloads and a rescan does not re-count the failure", async () => {

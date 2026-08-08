@@ -13,7 +13,7 @@ import type { ClaudeVersionCheck } from "../../src/cli/commands.js";
 import { baseUrlVerdict, claudeVersionVerdict } from "../../src/cli/commands.js";
 
 function check(over: Partial<ClaudeVersionCheck> = {}): ClaudeVersionCheck {
-  return { active: "2.1.226", newest: "2.1.226", unmanaged: false, ...over };
+  return { active: "2.1.226", newest: "2.1.226", ...over };
 }
 
 describe("claudeVersionVerdict", () => {
@@ -42,7 +42,7 @@ describe("claudeVersionVerdict", () => {
   });
 
   it("stays quiet on a non-standard install with no versions directory", () => {
-    const verdict = claudeVersionVerdict(check({ active: null, newest: null, unmanaged: true }));
+    const verdict = claudeVersionVerdict(check({ active: null, newest: null }));
     expect(verdict.level).toBe("ok");
   });
 
@@ -100,6 +100,15 @@ describe("baseUrlVerdict", () => {
   it("tells the user the bypass self-repairs, rather than leaving them to fix it", () => {
     const v = baseUrlVerdict({ settings: PROXY, shell: null }, GATEWAY, PROXY);
     expect(v.detail).toContain("re-chains");
+  });
+
+  it("does NOT promise a self-repair for a shell bypass, which the wrapper never heals", () => {
+    // bin/claude-wrapper.sh deliberately leaves an explicitly exported base URL alone, so the
+    // "launching claude re-chains it" message would send the user away waiting for nothing.
+    const v = baseUrlVerdict({ settings: null, shell: PROXY }, GATEWAY, PROXY);
+    expect(v.level).toBe("warn");
+    expect(v.detail).not.toContain("re-chains");
+    expect(v.detail).toContain("unset it");
   });
 
   it("ignores trailing slashes and case when matching the gateway", () => {
