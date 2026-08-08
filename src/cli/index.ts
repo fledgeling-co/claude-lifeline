@@ -23,7 +23,7 @@ import {
   templateRunCommand,
   templateSaveCommand,
 } from "./queue-template-commands.js";
-import type { ControlIntent } from "../shared/types.js";
+import type { ControlIntent, ControlVerb } from "../shared/types.js";
 import { ANSI, colorEnabled, paint, renderDoctor, renderStatus } from "./render.js";
 
 const program = new Command();
@@ -61,13 +61,14 @@ program
 
 /* ----------------------------------------------------- retry/pause/resume */
 
-const CONTROL_HELP: Record<ControlIntent["kind"], string> = {
+// The user-facing verbs only: `set-option` is a message the status window sends, not a command.
+const CONTROL_HELP: Record<ControlVerb, string> = {
   retry: "Retry a run or a single agent (idempotent — retry is resume).",
   pause: "Pause a run or a single agent; stops new dispatch.",
   resume: "Resume a paused run or agent and trigger recovery.",
 };
 
-function registerControl(kind: ControlIntent["kind"]): void {
+function registerControl(kind: ControlVerb): void {
   program
     .command(kind)
     .description(CONTROL_HELP[kind])

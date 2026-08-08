@@ -48,6 +48,8 @@ import type { RunScan } from "./journal.js";
 import { scanRunDir } from "./journal.js";
 import type { RelaunchDeps, RelaunchOutcome } from "./recovery.js";
 import { executeRelaunch, isDue, makeRepoSerializer, planRecovery } from "./recovery.js";
+import { loadSummary, summariseRun } from "./summariser.js";
+import type { SummaryInput } from "./summariser.js";
 
 const log = makeLogger("daemon");
 
@@ -427,6 +429,12 @@ export function startDaemon(
   }
 
   function applyIntent(intent: ControlIntent, t: number): void {
+    // A setting, not a run action: it carries no meaningful runId, so it is handled before the
+    // ledger lookup below (which would reject it as an unknown run).
+    if (intent.kind === "set-option") {
+      applyOption(intent);
+      return;
+    }
     const ledger = ledgers.get(intent.target.runId);
     if (!ledger) {
       log.warn(`intent ${intent.kind} for unknown run ${intent.target.runId}`);
@@ -483,6 +491,44 @@ export function startDaemon(
         ledgers.set(runId, next);
         saveLedger(next);
       }
+    }
+  }
+
+  /**
+   * Runs whose summary should be refreshed after this tick's snapshot is written. Filled while
+   * assembling each run, drained by `refreshSummaries`, so the model call never sits between
+   * the scan and the write.
+   */
+  const pendingSummaries = new Map<string, SummaryInput>();
+
+  /**
+   * Persist a setting the status window changed, merging into config.json rather than replacing
+   * it, and apply it to the live config so it takes effect on this tick instead of at the next
+   * restart. Unknown keys are ignored: the app and the daemon are versioned separately, and an
+   * older daemon meeting a newer app must do nothing rather than write something it invented.
+   */
+  function applyOption(intent: ControlIntent): void {
+    const option = intent.option;
+    if (!option) return;
+    const file = paths.config();
+    const onDisk = readJson<Record<string, unknown>>(file, {});
+    if (option.key === "summaries.enabled" && typeof option.value === "boolean") {
+      cfg.summaries.enabled = option.value;
+      const summaries = (onDisk["summaries"] as Record<string, unknown> | undefined) ?? {};
+      onDisk["summaries"] = { ...summaries, enabled: option.value };
+    } else if (option.key === "completedRetentionMs" && typeof option.value === "number") {
+      const ms = Math.max(0, option.value);
+      cfg.completedRetentionMs = ms;
+      onDisk["completedRetentionMs"] = ms;
+    } else {
+      log.warn(`ignoring unknown option ${String(option.key)}`);
+      return;
+    }
+    try {
+      writeJsonAtomic(file, onDisk);
+      log.info(`option ${option.key} = ${String(option.value)}`);
+    } catch (err) {
+      log.error("failed to persist option", String(err));
     }
   }
 
@@ -623,7 +669,44 @@ export function startDaemon(
       note: runNote(run),
       cwd: run?.cwd ?? null,
       callerTail: run?.callerTail ?? [],
+      // Read-through only. Refreshing happens after the snapshot is written, so a slow model
+      // call can never delay the tick that drives recovery.
+      ...summaryFieldsFor(ledger.runId, agents),
       ...terminalFor(run?.cwd ?? null),
+    };
+  }
+
+  /**
+   * The cached summary for a run, plus the per-agent activity lines, and a note-to-self to
+   * refresh it after this tick. Returns nothing at all when summaries are off, so the snapshot
+   * shape is identical to before for anyone who never turns them on.
+   */
+  function summaryFieldsFor(
+    runId: string,
+    agents: StatusAgent[],
+  ): Partial<StatusRun> {
+    if (!cfg.summaries.enabled) return {};
+    pendingSummaries.set(runId, {
+      runId,
+      workflowName: null,
+      workspace: null,
+      agents: agents.map((a) => ({
+        agentId: a.agentId ?? "",
+        item: a.item,
+        state: a.state,
+        tail: a.tail ?? [],
+      })),
+    });
+    const cached = loadSummary(runId);
+    if (!cached) return {};
+    for (const agent of agents) {
+      const activity = agent.agentId ? cached.result.agentActivity[agent.agentId] : undefined;
+      if (activity) agent.activity = activity;
+    }
+    return {
+      title: cached.result.title,
+      stateLine: cached.result.stateLine,
+      summaryState: cached.result.state,
     };
   }
 
@@ -712,6 +795,22 @@ export function startDaemon(
       writeJsonAtomic(paths.status(), snapshot);
     } catch (err) {
       log.error("failed to write status", String(err));
+    }
+    refreshSummaries(new Set(runs.map((r) => r.runId)));
+  }
+
+  /**
+   * Kick off summary refreshes for the runs just published. Deliberately not awaited: the reply
+   * lands in the cache and is rendered by the NEXT tick, so the only thing a slow or failing
+   * model call can delay is its own summary. `summariseRun` decides whether a call is warranted
+   * at all (content hash plus a minimum interval) and swallows its own failures.
+   */
+  function refreshSummaries(visible: Set<string>): void {
+    if (!cfg.summaries.enabled) return;
+    for (const [runId, input] of pendingSummaries) {
+      pendingSummaries.delete(runId);
+      if (!visible.has(runId)) continue; // dropped from the list between assembly and write
+      void summariseRun(input, cfg.summaries).catch(() => undefined);
     }
   }
 

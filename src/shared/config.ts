@@ -47,6 +47,29 @@ export interface LifelineConfig {
   completedRetentionMs: number;
   /** Most recent runs to show (by last activity); older ones are omitted. */
   maxRunsShown: number;
+  /** Plain-language run summaries, written by a small model. Off until asked for. */
+  summaries: SummaryConfig;
+}
+
+/**
+ * Summaries turn a run's mechanical state (counts, meters, an opaque id) into a sentence.
+ * Every call costs money, so the defaults are conservative and `enabled` starts false: nobody
+ * who installs lifeline should discover it spending on their behalf.
+ */
+export interface SummaryConfig {
+  enabled: boolean;
+  /** Small and cheap by design; this is a one-line summary, not analysis. */
+  model: string;
+  /** Newest transcript lines per agent to send. */
+  maxMessages: number;
+  /** Ignore anything older than this, so a long-idle run is not re-described from stale text. */
+  windowMs: number;
+  /** Floor between calls for one run, on top of the content hash. */
+  minIntervalMs: number;
+  /** Hard ceiling on prompt size, after trimming. */
+  maxInputChars: number;
+  /** Give up on a call after this; a summary is never worth blocking a tick for. */
+  timeoutMs: number;
 }
 
 export const DEFAULT_CONFIG: LifelineConfig = {
@@ -67,6 +90,15 @@ export const DEFAULT_CONFIG: LifelineConfig = {
   retentionMs: 3 * 60 * 60_000, // keep a run visible as long as it's within the window
   completedRetentionMs: 60 * 60_000, // show a finished run, greyed, for an hour after it ends
   maxRunsShown: 30, // cap the list to the most recent runs
+  summaries: {
+    enabled: false, // opt-in: this is the only feature that spends money
+    model: "claude-haiku-4-5-20251001",
+    maxMessages: 12,
+    windowMs: 30 * 60_000,
+    minIntervalMs: 30_000,
+    maxInputChars: 6_000,
+    timeoutMs: 45_000,
+  },
 };
 
 let cached: LifelineConfig | null = null;
@@ -83,6 +115,7 @@ export function loadConfig(force = false): LifelineConfig {
     ...DEFAULT_CONFIG,
     ...fromDisk,
     recovery: { ...DEFAULT_CONFIG.recovery, ...(fromDisk.recovery ?? {}) },
+    summaries: { ...DEFAULT_CONFIG.summaries, ...(fromDisk.summaries ?? {}) },
   };
   // Env overrides win over the file (installer sets these).
   if (process.env.LIFELINE_GATEWAY_PORT) cached.gatewayPort = Number(process.env.LIFELINE_GATEWAY_PORT);

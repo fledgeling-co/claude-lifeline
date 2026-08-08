@@ -63,12 +63,24 @@ export interface RunLedger {
 }
 
 /** A control intent written by the CLI and honoured by the daemon. */
+/** The control actions a person can take, from the CLI or the status window. */
+export type ControlVerb = "retry" | "pause" | "resume";
+
 export interface ControlIntent {
   id: string;
-  kind: "retry" | "pause" | "resume";
+  kind: ControlVerb | "set-option";
   target: { runId: string; agentId?: string | null }; // agentId absent => whole run
   createdAt: number;
+  /**
+   * `set-option` only: a setting to persist to config.json. The status window has no store of
+   * its own, and the DAEMON is what acts on these, so config.json stays the single source of
+   * truth rather than the app holding a second copy that can disagree with it.
+   */
+  option?: { key: SettableOption; value: boolean | number } | null;
 }
+
+/** The settings the status window is allowed to change. Deliberately a closed list. */
+export type SettableOption = "summaries.enabled" | "completedRetentionMs";
 
 /** Connectivity events emitted by the gateway, consumed by the daemon. */
 export interface ConnectivityEvent {
@@ -113,6 +125,12 @@ export interface StatusRun {
   tty?: string | null;
   /** Last cleaned lines of the top-level claude session that launched this run. */
   callerTail?: string[];
+  /** A short generated name for the run, when summaries are on. Falls back to workflowName. */
+  title?: string | null;
+  /** One short line on where the run is overall, e.g. "waiting on 3 tasks". */
+  stateLine?: string | null;
+  /** The coarse state behind `stateLine`: working | waiting | blocked | almost-done | done. */
+  summaryState?: string | null;
 }
 
 export interface StatusAgent {
@@ -133,4 +151,6 @@ export interface StatusAgent {
   stalledForMs?: number | null;
   /** Last few cleaned transcript lines (newest last), for the expandable log. */
   tail?: string[];
+  /** What this agent is working on right now, in a phrase, when summaries are on. */
+  activity?: string | null;
 }
