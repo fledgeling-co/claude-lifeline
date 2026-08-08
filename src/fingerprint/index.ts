@@ -26,6 +26,16 @@ const log = makeLogger("fingerprint");
 /** Chunk size for the binary marker scan. The binary is ~265MB; it is never read whole. */
 export const BINARY_SCAN_CHUNK = 1 << 20;
 
+/**
+ * Settle thresholds for the binary. A version file appears the instant its ~265MB download
+ * starts, and under launchd we are woken by that very event — so without a settle gate the
+ * marker scan reads a partial file, finds nothing, and raises contract drift against a version
+ * that is in fact fine. A file nothing has touched for `STABILITY` ms is finished.
+ */
+export const BINARY_SETTLE_STABILITY_MS = 5_000;
+export const BINARY_SETTLE_TIMEOUT_MS = 180_000;
+export const BINARY_SETTLE_POLL_MS = 500;
+
 /** Sampling bounds for journal discovery — a probe must never walk an unbounded tree. */
 const MAX_JOURNAL_FILES = 200;
 const MAX_LINES_PER_JOURNAL = 50;
@@ -60,6 +70,14 @@ export interface IncompatFlag {
   message: string;
 }
 
+/**
+ * Whether the binary had stopped changing when we probed it.
+ * - `settled` — quiescent, the probe read a complete file
+ * - `absent`  — nothing to stat (non-standard install, or an injected test path)
+ * - `timeout` — still changing after the timeout; we probe anyway and fail closed
+ */
+export type SettleOutcome = "settled" | "absent" | "timeout";
+
 export interface VersionCheck {
   version: string | null;
   compatible: boolean;
@@ -69,6 +87,8 @@ export interface VersionCheck {
   /** The flag written this pass, or null when the version verified clean. */
   flag: IncompatFlag | null;
   reason: string;
+  /** State of the binary when it was probed. Diagnostic — never part of the fingerprint. */
+  settle: SettleOutcome;
 }
 
 export interface FingerprintDeps {
@@ -81,6 +101,8 @@ export interface FingerprintDeps {
   readBinaryMarkers?: (path: string, markers: readonly string[]) => Promise<Record<string, boolean>>;
   listJournalPaths?: (projectsDir: string) => string[];
   readJournalEntries?: (journalPaths: readonly string[]) => Record<string, unknown>[];
+  /** Block until the binary stops changing. Injected in tests so nothing ever sleeps. */
+  waitForBinarySettle?: (path: string) => Promise<SettleOutcome>;
   now?: () => number;
 }
 
@@ -199,6 +221,64 @@ export async function readBinaryMarkers(
     log.warn(`binary marker scan failed for ${path}`, String(err));
   }
   return found;
+}
+
+// ── Settle gate ─────────────────────────────────────────────────────────────────────────────
+
+export interface SettleOptions {
+  stabilityMs?: number;
+  timeoutMs?: number;
+  pollMs?: number;
+  /** Injected in tests. Returns null when the path cannot be stat'd. */
+  statFile?: (path: string) => { mtimeMs: number } | null;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+function defaultStatFile(path: string): { mtimeMs: number } | null {
+  try {
+    return { mtimeMs: statSync(path).mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Wait until `path` has been untouched for `stabilityMs`.
+ *
+ * Age-of-mtime rather than a poll-and-compare loop: a file that settled hours ago returns on the
+ * first stat with no sleep at all, so the common case (a routine check against an installed
+ * version) costs nothing, while a file being actively written keeps having its mtime refreshed
+ * and cannot satisfy the test until the writer stops.
+ *
+ * `absent` is not an error — a non-standard install has no such file and the probes below fail
+ * closed on their own.
+ */
+export async function waitForBinarySettle(
+  path: string,
+  opts: SettleOptions = {},
+): Promise<SettleOutcome> {
+  const stabilityMs = opts.stabilityMs ?? BINARY_SETTLE_STABILITY_MS;
+  const timeoutMs = opts.timeoutMs ?? BINARY_SETTLE_TIMEOUT_MS;
+  const pollMs = opts.pollMs ?? BINARY_SETTLE_POLL_MS;
+  const statFile = opts.statFile ?? defaultStatFile;
+  const sleep = opts.sleep ?? defaultSleep;
+  const now = opts.now ?? Date.now;
+
+  const started = now();
+  for (;;) {
+    const stat = statFile(path);
+    if (stat === null) return "absent";
+    const age = now() - stat.mtimeMs;
+    // A future mtime (clock skew, a copy preserving timestamps) can never age into stability;
+    // blocking for the full timeout to learn that helps nobody.
+    if (age >= stabilityMs || age < 0) return "settled";
+    if (now() - started >= timeoutMs) return "timeout";
+    await sleep(pollMs);
+  }
 }
 
 // ── Persistence ─────────────────────────────────────────────────────────────────────────────
@@ -383,6 +463,9 @@ export function detectInstalledVersion(deps: FingerprintDeps = {}): string | nul
  * - no baseline at all     -> record this fingerprint as the baseline (trust on first use)
  * - baseline matches       -> bless the version, clear the flag
  * - baseline drifted       -> write the flag; the verified baseline is left untouched
+ *
+ * The binary is settled first. launchd wakes us on the filesystem event that STARTS the download,
+ * so probing immediately reads a partial file and reports drift against a version that is fine.
  */
 export async function checkInstalledVersion(deps: FingerprintDeps = {}): Promise<VersionCheck> {
   const now = deps.now ?? Date.now;
@@ -402,7 +485,14 @@ export async function checkInstalledVersion(deps: FingerprintDeps = {}): Promise
       current: null,
       flag,
       reason: "version-undetectable",
+      settle: "absent",
     };
+  }
+
+  const settleFn = deps.waitForBinarySettle ?? waitForBinarySettle;
+  const settle = await settleFn((deps.binaryPath ?? defaultBinaryPath)(version));
+  if (settle === "timeout") {
+    log.warn(`binary for ${version} was still changing after the settle timeout; probing anyway`);
   }
 
   const inputs = await gatherProbeInputs(version, deps);
@@ -422,6 +512,7 @@ export async function checkInstalledVersion(deps: FingerprintDeps = {}): Promise
       current,
       flag: null,
       reason: "baseline-recorded",
+      settle,
     };
   }
 
@@ -439,6 +530,7 @@ export async function checkInstalledVersion(deps: FingerprintDeps = {}): Promise
       current,
       flag: null,
       reason: stored === null ? "verified-and-blessed" : "verified",
+      settle,
     };
   }
 
@@ -454,6 +546,7 @@ export async function checkInstalledVersion(deps: FingerprintDeps = {}): Promise
     current,
     flag,
     reason: "contract-drift",
+    settle,
   };
 }
 

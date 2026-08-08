@@ -46,8 +46,30 @@ if [[ -f "${RECORD}" ]] && command -v node >/dev/null 2>&1 && [[ -f "${SETTINGS}
 fi
 
 # --- restore the real claude launcher ----------------------------------------------
-if [[ -f "${LIFELINE_HOME}/real-claude" ]]; then
-  real_target="$(cat "${LIFELINE_HOME}/real-claude")"
+# Restore to the NEWEST installed version, not to whatever was recorded: leaving someone on
+# an old binary is the one outcome an uninstaller must not produce. The recorded path is
+# used only when it points outside the versions directory (npm/homebrew installs).
+CLAUDE_VERSIONS_DIR="${LIFELINE_CLAUDE_VERSIONS_DIR:-$HOME/.local/share/claude/versions}"
+newest_version_path() {
+  local newest
+  [[ -d "${CLAUDE_VERSIONS_DIR}" ]] || return 1
+  newest="$(ls -1 "${CLAUDE_VERSIONS_DIR}" 2>/dev/null \
+    | grep -E '^[0-9]+(\.[0-9]+)*$' \
+    | sort -t. -k1,1nr -k2,2nr -k3,3nr -k4,4nr | head -1 || true)"
+  [[ -n "${newest}" && -x "${CLAUDE_VERSIONS_DIR}/${newest}" ]] || return 1
+  printf '%s\n' "${CLAUDE_VERSIONS_DIR}/${newest}"
+}
+
+real_target=""
+recorded="$(cat "${LIFELINE_HOME}/real-claude" 2>/dev/null || true)"
+if [[ -n "${recorded}" && "${recorded}" != "${CLAUDE_VERSIONS_DIR}/"* && -x "${recorded}" ]]; then
+  real_target="${recorded}"          # non-standard install — the recorded path IS the binary
+else
+  real_target="$(newest_version_path || true)"
+  [[ -z "${real_target}" && -x "${recorded}" ]] && real_target="${recorded}"
+fi
+
+if [[ -n "${real_target}" ]]; then
   rm -f "${CLAUDE_LINK}"
   ln -s "${real_target}" "${CLAUDE_LINK}"
   say "restored ${CLAUDE_LINK} -> ${real_target}"

@@ -28,6 +28,7 @@ import {
   loadFingerprint,
   readBinaryMarkers,
   readIncompatFlag,
+  waitForBinarySettle,
   saveFingerprint,
   sha256,
 } from "../../src/fingerprint/index.js";
@@ -396,5 +397,139 @@ describe("fingerprint directory hygiene", () => {
     saveFingerprint(computeFingerprint(VERSION, inputs(), () => NOW));
     expect(paths.fingerprintsDir().startsWith(tmp.env.home)).toBe(true);
     expect(existsSync(join(paths.fingerprintsDir(), `${VERSION}.json`))).toBe(true);
+  });
+});
+
+/**
+ * The settle gate. Regression cover for the false-drift race observed in the field on
+ * 2.1.225 and 2.1.226: launchd wakes the watcher on the filesystem event that STARTS the
+ * ~265MB download, so probing immediately read a partial binary, found none of the workflow
+ * markers, and flagged a version that was in fact fine — self-healing only because a later
+ * event happened to fire.
+ */
+describe("waitForBinarySettle", () => {
+  const PATH = "/synthetic/versions/2.1.226";
+
+  /** A clock the test drives, so nothing ever really sleeps. */
+  function fakeClock(startAt = 1_000_000) {
+    let t = startAt;
+    return {
+      now: () => t,
+      sleep: (ms: number) => {
+        t += ms;
+        return Promise.resolve();
+      },
+      advance: (ms: number) => {
+        t += ms;
+      },
+      at: () => t,
+    };
+  }
+
+  it("returns immediately for a file that settled long ago — no sleeping on the common path", async () => {
+    const clock = fakeClock();
+    let sleeps = 0;
+    const outcome = await waitForBinarySettle(PATH, {
+      now: clock.now,
+      sleep: (ms) => {
+        sleeps += 1;
+        return clock.sleep(ms);
+      },
+      statFile: () => ({ mtimeMs: clock.at() - 60_000 }),
+    });
+    expect(outcome).toBe("settled");
+    expect(sleeps).toBe(0);
+  });
+
+  it("reports absent when there is nothing to stat", async () => {
+    const outcome = await waitForBinarySettle(PATH, { statFile: () => null });
+    expect(outcome).toBe("absent");
+  });
+
+  it("waits while the file is still being written, then settles once it goes quiet", async () => {
+    const clock = fakeClock();
+    // Mimics a download: mtime keeps pace with now until the writer stops.
+    let writingUntil = clock.at() + 4_000;
+    const outcome = await waitForBinarySettle(PATH, {
+      stabilityMs: 5_000,
+      pollMs: 500,
+      now: clock.now,
+      sleep: clock.sleep,
+      statFile: () => ({ mtimeMs: Math.min(clock.at(), writingUntil) }),
+    });
+    expect(outcome).toBe("settled");
+    // It cannot have settled before the writer stopped plus the stability window.
+    expect(clock.at()).toBeGreaterThanOrEqual(writingUntil + 5_000);
+  });
+
+  it("gives up with timeout on a file that never stops changing", async () => {
+    const clock = fakeClock();
+    const outcome = await waitForBinarySettle(PATH, {
+      stabilityMs: 5_000,
+      timeoutMs: 30_000,
+      pollMs: 500,
+      now: clock.now,
+      sleep: clock.sleep,
+      statFile: () => ({ mtimeMs: clock.at() }),
+    });
+    expect(outcome).toBe("timeout");
+  });
+
+  it("treats a future mtime as settled rather than blocking for the whole timeout", async () => {
+    const clock = fakeClock();
+    const outcome = await waitForBinarySettle(PATH, {
+      now: clock.now,
+      sleep: clock.sleep,
+      statFile: () => ({ mtimeMs: clock.at() + 10_000 }),
+    });
+    expect(outcome).toBe("settled");
+  });
+});
+
+describe("checkInstalledVersion settles the binary before probing", () => {
+  const tmp = useTempEnv();
+
+  it("waits for the binary, and probes only after it has settled", async () => {
+    writeFileSync(join(tmp.env.versions, VERSION), "binary", "utf8");
+    const order: string[] = [];
+
+    const result = await checkInstalledVersion(
+      deps(
+        {
+          versionsDir: () => tmp.env.versions,
+          waitForBinarySettle: () => {
+            order.push("settle");
+            return Promise.resolve("settled" as const);
+          },
+          readBinaryMarkers: () => {
+            order.push("probe");
+            return Promise.resolve(markers());
+          },
+        },
+      ),
+    );
+
+    expect(order).toEqual(["settle", "probe"]);
+    expect(result.settle).toBe("settled");
+  });
+
+  it("still probes and fails closed when the binary never settles", async () => {
+    writeFileSync(join(tmp.env.versions, VERSION), "binary", "utf8");
+    // A baseline exists, so an incomplete read must show up as drift rather than be blessed.
+    await checkInstalledVersion(deps({ versionsDir: () => tmp.env.versions }));
+
+    const result = await checkInstalledVersion(
+      deps(
+        {
+          versionsDir: () => tmp.env.versions,
+          waitForBinarySettle: () => Promise.resolve("timeout" as const),
+        },
+        markers({ workflow_agent: false }),
+      ),
+    );
+
+    expect(result.settle).toBe("timeout");
+    expect(result.compatible).toBe(false);
+    expect(result.reason).toBe("contract-drift");
   });
 });

@@ -31,12 +31,29 @@ if command -v node >/dev/null 2>&1 && [[ -f "$HOME/.claude/settings.json" ]]; th
     try { const s = require(process.env.HOME + "/.claude/settings.json");
       process.stdout.write((s.env && s.env.ANTHROPIC_BASE_URL) || ""); } catch {}' 2>/dev/null || true)"
 fi
+# On a re-install the settings value is ALREADY the gateway, so it can no longer tell us
+# what sits behind it. Recover the proxy from the existing config (then the recorded
+# original) instead of falling through to the API, which would silently drop a chained
+# proxy out of the route on every re-run.
+existing_upstream=""
+if command -v node >/dev/null 2>&1; then
+  existing_upstream="$(LIFELINE_HOME="${LIFELINE_HOME}" node -e '
+    const fs = require("fs"), path = require("path");
+    const home = process.env.LIFELINE_HOME;
+    const read = (p, k) => { try { return JSON.parse(fs.readFileSync(p, "utf8"))[k] || ""; } catch { return ""; } };
+    const fromConfig = read(path.join(home, "config.json"), "upstream");
+    const fromRecord = read(path.join(home, "settings-base-url.orig.json"), "original");
+    process.stdout.write(fromConfig || fromRecord || "");' 2>/dev/null || true)"
+fi
+
 if [[ -n "${LIFELINE_UPSTREAM:-}" ]]; then
   UPSTREAM="${LIFELINE_UPSTREAM}"
 elif [[ -n "${settings_base_url}" && "${settings_base_url}" != http://127.0.0.1:${GATEWAY_PORT}* ]]; then
   UPSTREAM="${settings_base_url}"
 elif [[ -n "${ANTHROPIC_BASE_URL:-}" && "${ANTHROPIC_BASE_URL}" != http://127.0.0.1:${GATEWAY_PORT}* ]]; then
   UPSTREAM="${ANTHROPIC_BASE_URL}"
+elif [[ -n "${existing_upstream}" && "${existing_upstream}" != http://127.0.0.1:${GATEWAY_PORT}* ]]; then
+  UPSTREAM="${existing_upstream}"
 else
   UPSTREAM="https://api.anthropic.com"
 fi
@@ -112,13 +129,20 @@ if [[ -z "${real_target}" || "${real_target}" == *"claude-wrapper.sh" ]]; then
     real_target="$(cat "${LIFELINE_HOME}/real-claude")"
   fi
 fi
-# Fall back to the newest installed version.
+# Fall back to the newest installed version — by version number, not mtime, which reorders
+# whenever an older version is re-downloaded.
 if [[ -z "${real_target}" && -d "${CLAUDE_VERSIONS_DIR}" ]]; then
-  newest="$(ls -t "${CLAUDE_VERSIONS_DIR}" 2>/dev/null | head -1 || true)"
+  newest="$(ls -1 "${CLAUDE_VERSIONS_DIR}" 2>/dev/null \
+    | grep -E '^[0-9]+(\.[0-9]+)*$' \
+    | sort -t. -k1,1nr -k2,2nr -k3,3nr -k4,4nr | head -1 || true)"
   [[ -n "${newest}" ]] && real_target="${CLAUDE_VERSIONS_DIR}/${newest}"
 fi
 [[ -n "${real_target}" && -x "${real_target}" ]] || die "could not find your real claude binary. Install Claude Code first."
 
+# A FALLBACK, not a pin. The wrapper resolves the newest installed version at launch and
+# refreshes this file to whatever it last ran, so Claude Code updates take effect on their
+# own; this recorded path only matters for installs with no versions directory (npm,
+# homebrew) and for the seconds while a new version is still downloading.
 echo "${real_target}" > "${LIFELINE_HOME}/real-claude"
 say "real Claude Code binary: ${real_target}"
 
@@ -127,8 +151,19 @@ install -m 0755 "${SRC}/bin/claude-wrapper.sh" "${LIFELINE_HOME}/claude-wrapper.
 # Keep a copy of the uninstaller where the menu-bar app's "Uninstall" action looks for it.
 install -m 0755 "${SRC}/uninstall.sh" "${LIFELINE_HOME}/uninstall.sh" 2>/dev/null \
   || cp "${SRC}/uninstall.sh" "${LIFELINE_HOME}/uninstall.sh" 2>/dev/null || true
+# The wrapper re-chains settings.json on launch when it has drifted, so the patcher has to
+# live somewhere that survives the checkout being moved or deleted.
+install -m 0755 "${SRC}/install/patch-settings.mjs" "${LIFELINE_HOME}/patch-settings.mjs" 2>/dev/null \
+  || cp "${SRC}/install/patch-settings.mjs" "${LIFELINE_HOME}/patch-settings.mjs" 2>/dev/null || true
 if [[ -e "${CLAUDE_LINK}" || -L "${CLAUDE_LINK}" ]]; then
-  cp -a "${CLAUDE_LINK}" "${LIFELINE_HOME}/claude.pre-lifeline.bak" 2>/dev/null || true
+  # Back up ONCE, and never back up our own wrapper. Re-running the installer used to
+  # overwrite the genuine pre-lifeline launcher with a copy of the wrapper, leaving a
+  # self-referential backup that uninstall would happily "restore".
+  link_target="$(readlink "${CLAUDE_LINK}" 2>/dev/null || true)"
+  if [[ ! -e "${LIFELINE_HOME}/claude.pre-lifeline.bak" && ! -L "${LIFELINE_HOME}/claude.pre-lifeline.bak" \
+        && "${link_target}" != *"claude-wrapper.sh" ]]; then
+    cp -a "${CLAUDE_LINK}" "${LIFELINE_HOME}/claude.pre-lifeline.bak" 2>/dev/null || true
+  fi
   rm -f "${CLAUDE_LINK}"
 fi
 ln -s "${LIFELINE_HOME}/claude-wrapper.sh" "${CLAUDE_LINK}"

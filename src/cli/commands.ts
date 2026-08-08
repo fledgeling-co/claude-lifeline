@@ -7,13 +7,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
 
 import { gatewayUrl, loadConfig } from "../shared/config.js";
 import type { LifelineConfig } from "../shared/config.js";
+import { compareVersions, isVersionName } from "../fingerprint/index.js";
 import { ensureDir, readJson, writeJsonAtomic } from "../shared/io.js";
-import { paths } from "../shared/paths.js";
+import { claudeVersionsDir, paths } from "../shared/paths.js";
 import type { ControlIntent, StatusSnapshot } from "../shared/types.js";
 
 /** Pidfile the daemon writes. Inside ~/.lifeline, alongside the other runtime state. */
@@ -57,7 +59,25 @@ export interface CommandDeps {
   readIncompat(): IncompatFlag | null;
   /** Whether the optional menu-bar status window is installed. */
   checkMenubar(): { installed: boolean };
+  /** Which Claude Code the wrapper would launch, versus the newest one installed. */
+  checkClaudeVersion(): ClaudeVersionCheck;
+  /** ANTHROPIC_BASE_URL from ~/.claude/settings.json, which outranks the environment. */
+  readSettingsBaseUrl(): string | null;
   newId(): string;
+}
+
+/**
+ * lifeline owns ~/.local/bin/claude, so Claude Code's own updater can no longer repoint it.
+ * That makes "the version you would launch" a thing lifeline is now responsible for, and a
+ * thing that can silently fall behind. This check is what makes falling behind loud.
+ */
+export interface ClaudeVersionCheck {
+  /** The version the wrapper resolves at launch, or null when it cannot be determined. */
+  active: string | null;
+  /** The newest version present on disk, or null when there is no versions directory. */
+  newest: string | null;
+  /** True for a non-standard install (npm/homebrew): no versions dir to fall behind. */
+  unmanaged: boolean;
 }
 
 /* ------------------------------------------------------------- default deps */
@@ -149,8 +169,57 @@ export function defaultDeps(): CommandDeps {
     checkDaemon: defaultCheckDaemon,
     readIncompat: defaultReadIncompat,
     checkMenubar: defaultCheckMenubar,
+    checkClaudeVersion: defaultCheckClaudeVersion,
+    readSettingsBaseUrl: defaultReadSettingsBaseUrl,
     newId: () => randomUUID(),
   };
+}
+
+/**
+ * Compare the version the wrapper LAST LAUNCHED (it records each resolution) against the newest
+ * version on disk. Reading the wrapper's own trace, rather than re-deriving what it ought to
+ * pick, is deliberate: re-deriving would agree with itself and could never catch the wrapper
+ * pinning an old binary, which is exactly the failure this check exists to make loud.
+ */
+function defaultCheckClaudeVersion(): ClaudeVersionCheck {
+  let versions: string[] = [];
+  try {
+    versions = readdirSync(claudeVersionsDir())
+      .filter(isVersionName)
+      .sort((a, b) => compareVersions(b, a));
+  } catch {
+    versions = [];
+  }
+  const newest = versions[0] ?? null;
+
+  let active: string | null = null;
+  try {
+    const recorded = readFileSync(join(paths.home(), "real-claude"), "utf8").trim();
+    if (recorded !== "") {
+      const base = basename(recorded);
+      active = isVersionName(base) ? base : null;
+    }
+  } catch {
+    // No record yet — claude has not been launched through the wrapper.
+  }
+
+  return { active, newest, unmanaged: newest === null };
+}
+
+/** Read-only and tolerant: an unreadable or malformed settings file simply has no base URL. */
+function defaultReadSettingsBaseUrl(): string | null {
+  try {
+    const raw: unknown = JSON.parse(
+      readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"),
+    );
+    if (typeof raw !== "object" || raw === null) return null;
+    const env = (raw as { env?: unknown }).env;
+    if (typeof env !== "object" || env === null) return null;
+    const value = (env as { ANTHROPIC_BASE_URL?: unknown }).ANTHROPIC_BASE_URL;
+    return typeof value === "string" && value.trim() !== "" ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function defaultCheckMenubar(): { installed: boolean } {
@@ -309,6 +378,75 @@ function normalizeUrl(url: string): string {
   return url.trim().replace(/\/+$/, "").toLowerCase();
 }
 
+/** Where a base URL can come from, in the order Claude Code itself resolves them. */
+export interface BaseUrlSources {
+  /** ~/.claude/settings.json `env`. Claude Code applies this itself; it outranks the shell. */
+  settings: string | null;
+  /** This shell's environment. Only reaches claude when settings.json does not set one. */
+  shell: string | null;
+}
+
+/**
+ * Pure. Judges the route claude will ACTUALLY take, which is decided by settings.json first
+ * and only then by the environment. The old check read the shell alone, so a proxy sitting in
+ * settings.json read as a scary `fail` in one shell and a clean `ok` in another while claude
+ * bypassed the gateway in both.
+ */
+export function baseUrlVerdict(
+  sources: BaseUrlSources,
+  gateway: string,
+  upstream: string,
+): { level: CheckLevel; detail: string } {
+  const effective = sources.settings ?? sources.shell;
+  const via = sources.settings != null ? "settings.json" : "this shell";
+
+  if (effective == null || effective.trim() === "") {
+    return {
+      level: "ok",
+      detail: `unset; the wrapper exports ${gateway} when launching claude (upstream ${upstream})`,
+    };
+  }
+  if (normalizeUrl(effective) === normalizeUrl(gateway)) {
+    return { level: "ok", detail: `routed through the gateway via ${via} (upstream ${upstream})` };
+  }
+  // A warning, not a failure: the wrapper re-chains this at the next launch, so it is a
+  // transient state with a known repair rather than something the user must go and fix.
+  return {
+    level: "warn",
+    detail:
+      `${via} points at ${effective}, not the gateway (${gateway}), so claude is bypassing lifeline; ` +
+      `launching claude re-chains it and makes ${effective} the upstream`,
+  };
+}
+
+/**
+ * Pure. A record behind the newest version reads the same whether claude simply has not been
+ * launched since the update or the wrapper is pinning — and the user's position is identical
+ * either way — so the message covers both and says which one a relaunch would prove.
+ */
+export function claudeVersionVerdict(
+  check: ClaudeVersionCheck,
+): { level: CheckLevel; detail: string } {
+  if (check.unmanaged) {
+    return { level: "ok", detail: "no versions directory — non-standard install, nothing to track" };
+  }
+  if (check.active === null) {
+    return {
+      level: "ok",
+      detail: `newest installed is ${check.newest ?? "unknown"}; claude has not been launched through lifeline yet`,
+    };
+  }
+  if (check.newest === null || compareVersions(check.active, check.newest) >= 0) {
+    return { level: "ok", detail: `running ${check.active} (newest installed)` };
+  }
+  return {
+    level: "warn",
+    detail:
+      `last launched ${check.active}, but ${check.newest} is installed — run claude once to pick it up; ` +
+      `if it still says ${check.active} afterwards the wrapper is pinning and lifeline is holding you back`,
+  };
+}
+
 export async function doctorCommand(deps: CommandDeps = defaultDeps()): Promise<DoctorReport> {
   const cfg = deps.config();
   const url = gatewayUrl(cfg);
@@ -332,32 +470,15 @@ export async function doctorCommand(deps: CommandDeps = defaultDeps()): Promise<
     detail: daemon.detail,
   });
 
-  // The installer's wrapper exports ANTHROPIC_BASE_URL per-process, so an unset value in
-  // an ordinary shell is expected and only worth a warning. A value pointing somewhere
-  // else is a real misroute: claude would bypass the gateway entirely.
-  const baseUrl = deps.env.ANTHROPIC_BASE_URL;
-  if (baseUrl == null || baseUrl.trim() === "") {
-    checks.push({
-      id: "base-url",
-      label: "ANTHROPIC_BASE_URL",
-      level: "warn",
-      detail: `not set in this shell; the lifeline wrapper exports ${url} when launching claude`,
-    });
-  } else if (normalizeUrl(baseUrl) === normalizeUrl(url)) {
-    checks.push({
-      id: "base-url",
-      label: "ANTHROPIC_BASE_URL",
-      level: "ok",
-      detail: `routed through the gateway (${baseUrl})`,
-    });
-  } else {
-    checks.push({
-      id: "base-url",
-      label: "ANTHROPIC_BASE_URL",
-      level: "fail",
-      detail: `points at ${baseUrl}, not the gateway (${url}) — claude bypasses lifeline`,
-    });
-  }
+  checks.push({
+    id: "base-url",
+    label: "ANTHROPIC_BASE_URL",
+    ...baseUrlVerdict(
+      { settings: deps.readSettingsBaseUrl(), shell: deps.env.ANTHROPIC_BASE_URL ?? null },
+      url,
+      deps.config().upstream,
+    ),
+  });
 
   // A raw key in the environment can take precedence over the wrapper's routing and send
   // traffic straight to the API (see PLAN.md §3, "sharp edges").
@@ -382,6 +503,13 @@ export async function doctorCommand(deps: CommandDeps = defaultDeps()): Promise<
         ? "no incompatibility flagged"
         : `unsupported version ${incompat.version ?? "unknown"} — lifeline running in reduced mode` +
           (incompat.reason != null ? ` (${incompat.reason})` : ""),
+  });
+
+  const claude = deps.checkClaudeVersion();
+  checks.push({
+    id: "claude-version",
+    label: "Claude Code version",
+    ...claudeVersionVerdict(claude),
   });
 
   // The status window is optional (needs swiftc at install time), so its absence is a
