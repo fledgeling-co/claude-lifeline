@@ -36,6 +36,11 @@ struct StatusRun: Decodable, Identifiable {
     var callerTail: [String]?
     var workflowName: String?
     var workspace: String?
+    // Written only when summaries are on, so every one of these stays optional and the app
+    // decodes a snapshot from a daemon that has never heard of them.
+    var title: String?
+    var stateLine: String?
+    var summaryState: String?
     var id: String { runId }
 }
 
@@ -52,17 +57,33 @@ struct StatusAgent: Decodable, Identifiable {
     var contextTokens: Int?
     var stalledForMs: Double?
     var tail: [String]?
+    var activity: String?
     var id: String { agentId ?? item ?? UUID().uuidString }
 }
 
 struct ControlIntent: Encodable {
     var id: String
-    var kind: String            // retry | pause | resume
+    var kind: String            // retry | pause | resume | set-option
     var target: Target
     var createdAt: Double
+    var option: Option?
     struct Target: Encodable {
         var runId: String
         var agentId: String?
+    }
+    /// `set-option` only. Settings live in config.json because the DAEMON acts on them; the app
+    /// holds no store of its own, so there is nothing here that can disagree with the daemon.
+    struct Option: Encodable {
+        var key: String
+        var boolValue: Bool?
+        var numberValue: Double?
+        enum CodingKeys: String, CodingKey { case key, value }
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(key, forKey: .key)
+            if let b = boolValue { try c.encode(b, forKey: .value) }
+            if let n = numberValue { try c.encode(n, forKey: .value) }
+        }
     }
 }
 
@@ -94,6 +115,43 @@ enum Lifeline {
         (try? FileManager.default.attributesOfItem(atPath: statusFile.path))?[.modificationDate] as? Date
     }
 
+    static var configFile: URL { home.appendingPathComponent("config.json") }
+
+    /// Read the two settings the window exposes. config.json is the daemon's file and its own
+    /// source of truth; the window reflects it rather than keeping a second copy that could
+    /// drift out of step with what the daemon is actually doing.
+    static func readSettings() -> (summaries: Bool, completedRetentionMs: Double) {
+        guard let data = try? Data(contentsOf: configFile),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return (false, 3_600_000) }
+        let summaries = ((obj["summaries"] as? [String: Any])?["enabled"] as? Bool) ?? false
+        let retention = (obj["completedRetentionMs"] as? Double) ?? 3_600_000
+        return (summaries, retention)
+    }
+
+    /// Ask the daemon to persist a setting. Same channel, same ordering, same single writer as
+    /// every other control the window offers.
+    static func writeOption(key: String, boolValue: Bool? = nil, numberValue: Double? = nil) {
+        let fm = FileManager.default
+        try? fm.createDirectory(at: intentsDir, withIntermediateDirectories: true)
+        let intent = ControlIntent(
+            id: UUID().uuidString.lowercased(),
+            kind: "set-option",
+            target: .init(runId: "", agentId: nil),
+            createdAt: Date().timeIntervalSince1970 * 1000,
+            option: .init(key: key, boolValue: boolValue, numberValue: numberValue)
+        )
+        let ts = Int(intent.createdAt)
+        let file = intentsDir.appendingPathComponent("\(ts)-\(intent.id).json")
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? enc.encode(intent) {
+            let tmp = intentsDir.appendingPathComponent(".\(intent.id).tmp")
+            try? data.write(to: tmp)
+            try? fm.moveItem(at: tmp, to: file)
+        }
+    }
+
     /// Timestamp-first filename so the daemon drains intents in order (same as the CLI).
     static func writeIntent(kind: String, runId: String, agentId: String?) {
         let fm = FileManager.default
@@ -102,7 +160,8 @@ enum Lifeline {
             id: UUID().uuidString.lowercased(),
             kind: kind,
             target: .init(runId: runId, agentId: agentId),
-            createdAt: Date().timeIntervalSince1970 * 1000
+            createdAt: Date().timeIntervalSince1970 * 1000,
+            option: nil
         )
         let ts = Int(intent.createdAt)
         let file = intentsDir.appendingPathComponent("\(ts)-\(intent.id).json")
@@ -343,6 +402,23 @@ struct PopoverView: View {
             Text("Updated \(model.updatedAgo)").foregroundStyle(.secondary)
             Spacer()
             Menu {
+                Toggle("Summarise what each workflow is doing", isOn: Binding(
+                    get: { model.summariesEnabled },
+                    set: { model.setSummaries($0) }
+                ))
+                .help("Uses a small model to describe each run. This is the only thing lifeline spends money on.")
+                Menu("Keep finished workflows for") {
+                    // 0 is a real choice, not a disabled state: hide a run the moment it finishes.
+                    ForEach(Model.retentionChoices, id: \.ms) { choice in
+                        Button {
+                            model.setCompletedRetention(choice.ms)
+                        } label: {
+                            // A tick beats a disabled row: the current value stays selectable.
+                            Text(model.completedRetentionMs == choice.ms ? "✓ \(choice.label)" : choice.label)
+                        }
+                    }
+                }
+                Divider()
                 Button("Uninstall Claude Code workflow patch…") { model.requestUninstall() }
             } label: {
                 Image(systemName: "ellipsis.circle").font(.system(size: 12))
@@ -466,15 +542,20 @@ struct RunRow: View {
     /// states that want a word: warning, recovering, completed, completed-with-failures.
     var showChip: Bool { run.state != "running" }
 
-    /// The workflow is the title (the project now lives in the top nav).
+    /// The generated title when there is one, else the workflow's own name. The project lives
+    /// in the top nav, so it is only the last resort.
     var titleText: String {
-        run.workflowName ?? run.workspace ?? run.project.split(separator: "-").last.map(String.init) ?? run.project
+        if let t = run.title, !t.isEmpty { return t }
+        return run.workflowName ?? run.workspace ?? run.project.split(separator: "-").last.map(String.init) ?? run.project
     }
     /// Beneath it, the run's current activity (its narrator line) — what it's doing right now,
     /// which is more useful than repeating the project. Hidden when expanded, where the full
     /// (expandable) note shows below instead.
     var subtitleText: String? {
         if expanded { return nil }
+        // The generated line says where the run IS ("waiting on 3 tasks"); the narrator note is
+        // whatever it last printed. The former answers "does this need me", so it wins.
+        if let line = run.stateLine, !line.isEmpty { return line }
         if let note = run.note, !note.isEmpty { return note }
         return nil
     }
@@ -502,7 +583,17 @@ struct RunRow: View {
                 Circle().fill(Vocab.runChip(run.state).color).frame(width: 8, height: 8)
                     .accessibilityLabel(Vocab.runChip(run.state).text)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(titleText).fontWeight(.semibold).lineLimit(1)
+                    HStack(spacing: 6) {
+                        // layoutPriority: a long title truncates BEFORE the id does. The id is
+                        // short, fixed-width and the thing you grep logs with, so losing its end
+                        // to an ellipsis would cost more than losing the end of a sentence.
+                        Text(titleText).fontWeight(.semibold).lineLimit(1).layoutPriority(1)
+                        Text(run.runId)
+                            .font(.system(size: subSize, design: .monospaced))
+                            .foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+                            .layoutPriority(2)
+                            .accessibilityHidden(true) // already read as part of the row's label
+                    }
                     if let sub = subtitleText, !sub.isEmpty {
                         // `.secondary` (~5:1), not `.tertiary` (~2.4:1) — this carries real info
                         // (repo / run id) and is the only disambiguator when names repeat.
@@ -650,7 +741,14 @@ struct AgentRow: View {
                 // The state word sits right beside the dot, so the dot is decorative for AX.
                 Circle().fill(Vocab.agentDot(agent.state)).frame(width: 8, height: 8)
                     .accessibilityHidden(true)
-                Text(agent.item ?? String((agent.agentId ?? "agent").prefix(12))).lineLimit(1)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(agent.item ?? String((agent.agentId ?? "agent").prefix(12))).lineLimit(1)
+                    // What this agent is actually doing. Only present when summaries are on, and
+                    // the whole row keeps its old shape without it.
+                    if let activity = agent.activity, !activity.isEmpty {
+                        Text(activity).font(.system(size: stateSize)).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
                 Text(Vocab.agentLabel(agent, now: model.now)).font(.system(size: stateSize)).foregroundStyle(stateColor)
                 Spacer(minLength: 6)
                 MetaView(durationMs: agent.durationMs ?? nil, contextFrac: agent.contextFrac ?? nil, contextTokens: agent.contextTokens)
@@ -827,6 +925,8 @@ final class Model: ObservableObject {
     /// The one run currently expanded (accordion: at most one open at a time). nil = all
     /// collapsed, which is the initial state. Persisted here so a refresh can't change it.
     @Published var expandedRun: String? = nil
+    @Published var summariesEnabled: Bool = false
+    @Published var completedRetentionMs: Double = 3_600_000
     /// The selected project in the top nav (nil = All). Filters the run list.
     @Published var projectFilter: String? = nil
     @Published var coreState: CoreState = .installed
@@ -1034,6 +1134,15 @@ final class Model: ObservableObject {
     /// false we avoid the per-tick `now`/stale churn that would otherwise re-render the whole
     /// (offscreen) tree every 1.5s. The JSON decode happens only when the file's mtime changed.
     func refresh(uiVisible: Bool = true) {
+        // Only while the window is actually open: these drive the menu, nobody is looking at
+        // them otherwise, and the daemon rewrites config.json on its own schedule.
+        if uiVisible {
+            let settings = Lifeline.readSettings()
+            if settings.summaries != summariesEnabled { summariesEnabled = settings.summaries }
+            if settings.completedRetentionMs != completedRetentionMs {
+                completedRetentionMs = settings.completedRetentionMs
+            }
+        }
         let mtime = Lifeline.statusMtime()
         if mtime != lastMtime {
             let (snap, _) = Lifeline.readSnapshot()
@@ -1065,6 +1174,24 @@ final class Model: ObservableObject {
             lastCoreCheck = Date()
             detectCore()
         }
+    }
+
+    /// The retention choices offered in the menu. 0 is deliberate: hide a finished run at once.
+    static let retentionChoices: [(ms: Double, label: String)] = [
+        (0, "Hide when finished"),
+        (300_000, "5 minutes"),
+        (3_600_000, "1 hour"),
+        (86_400_000, "1 day"),
+    ]
+
+    func setSummaries(_ on: Bool) {
+        summariesEnabled = on // reflect at once; the daemon confirms on its next tick
+        Lifeline.writeOption(key: "summaries.enabled", boolValue: on)
+    }
+
+    func setCompletedRetention(_ ms: Double) {
+        completedRetentionMs = ms
+        Lifeline.writeOption(key: "completedRetentionMs", numberValue: ms)
     }
 
     func send(kind: String, runId: String, agentId: String?) {
