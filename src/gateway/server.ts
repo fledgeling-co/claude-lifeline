@@ -192,6 +192,22 @@ export function repairRelayBridge(cfg: LifelineConfig, relayPort: number | null)
   };
 }
 
+/**
+ * Remove an identity marker that no longer describes the configured upstream.
+ *
+ * The marker is an assertion made by Lifeline itself: every successful adoption and repair writes
+ * its port alongside the same upstream. A mismatch can therefore only be a legacy/config-writer
+ * defect or an operator changing the upstream outside the gateway. Clearing the marker preserves
+ * that chosen upstream; it deliberately does NOT redirect it to the current Relay port. A later
+ * adoption still requires the exact loopback-port match below.
+ */
+export function discardIncoherentRelayBridge(cfg: LifelineConfig): LifelineConfig | null {
+  const known = cfg.relayBridge?.lastKnownPort;
+  if (!Number.isInteger(known) || known === undefined || loopbackPort(cfg.upstream) === known) return null;
+  const { relayBridge: _, ...withoutMarker } = cfg;
+  return withoutMarker;
+}
+
 /** Read Relay's UserDefaults value without a shell; malformed output is never trusted. */
 function readRelayPort(): number | null {
   try {
@@ -703,6 +719,11 @@ export async function startGateway(cfg: LifelineConfig = loadConfig()): Promise<
   // Do not override an explicit process-level upstream. For file-configured routes, adopt a
   // bridge marker only after exact positive identification against Relay's own persisted port.
   if (!process.env.LIFELINE_UPSTREAM) {
+    const coherent = discardIncoherentRelayBridge(cfg);
+    if (coherent) {
+      cfg = coherent;
+      persistRelayBridge(cfg);
+    }
     const adopted = adoptRelayBridge(cfg, readRelayPort());
     if (adopted) {
       cfg = adopted;

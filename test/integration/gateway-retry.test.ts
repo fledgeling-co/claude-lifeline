@@ -24,6 +24,7 @@ import {
   buildResponseHeaders,
   buildUpstreamUrl,
   adoptRelayBridge,
+  discardIncoherentRelayBridge,
   decodeErrorBody,
   extractErrorCode,
   extractErrorMessage,
@@ -356,6 +357,22 @@ describe("gateway header and URL plumbing", () => {
     // A generic local upstream is not a Relay bridge and therefore can never be rewritten.
     expect(repairRelayBridge({ ...source, upstream: "http://127.0.0.1:9000" }, 8859)).toBeNull();
     expect(repairRelayBridge({ ...adopted, upstream: "http://127.0.0.1:9000" }, 8859)).toBeNull();
+  });
+
+  it("clears a legacy Relay marker when its upstream was replaced", () => {
+    const coherent = must(adoptRelayBridge(
+      { ...DEFAULT_CONFIG, upstream: "http://127.0.0.1:8858" },
+      8858,
+    ), "Relay bridge");
+    const stale = { ...coherent, upstream: "http://127.0.0.1:8857" };
+
+    // Preserve the newer explicit route: the marker is only identity evidence, never authority
+    // to overwrite another local proxy. With no marker, a later exact match can adopt afresh.
+    expect(discardIncoherentRelayBridge(stale)).toEqual({
+      ...DEFAULT_CONFIG,
+      upstream: "http://127.0.0.1:8857",
+    });
+    expect(adoptRelayBridge(stale, 8857)).toBeNull();
   });
 
   it("headerValue takes the first value of a repeated header", () => {

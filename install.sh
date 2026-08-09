@@ -115,6 +115,7 @@ node -e '
   try { cfg = JSON.parse(fs.readFileSync(p, "utf8")); } catch {}
   cfg.gatewayHost = "127.0.0.1";
   cfg.gatewayPort = Number(process.argv[2]);
+  if (cfg.upstream !== process.argv[3]) delete cfg.relayBridge;
   cfg.upstream = process.argv[3];
   fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
 ' "${LIFELINE_HOME}/config.json" "${GATEWAY_PORT}" "${UPSTREAM}"
@@ -160,6 +161,8 @@ install -m 0755 "${SRC}/uninstall.sh" "${LIFELINE_HOME}/uninstall.sh" 2>/dev/nul
 # live somewhere that survives the checkout being moved or deleted.
 install -m 0755 "${SRC}/install/patch-settings.mjs" "${LIFELINE_HOME}/patch-settings.mjs" 2>/dev/null \
   || cp "${SRC}/install/patch-settings.mjs" "${LIFELINE_HOME}/patch-settings.mjs" 2>/dev/null || true
+install -m 0755 "${SRC}/install/update-gateway-upstream.mjs" "${LIFELINE_HOME}/update-gateway-upstream.mjs" 2>/dev/null \
+  || cp "${SRC}/install/update-gateway-upstream.mjs" "${LIFELINE_HOME}/update-gateway-upstream.mjs" 2>/dev/null || true
 if [[ -e "${CLAUDE_LINK}" || -L "${CLAUDE_LINK}" ]]; then
   # Back up ONCE, and never back up our own wrapper. Re-running the installer used to
   # overwrite the genuine pre-lifeline launcher with a copy of the wrapper, leaving a

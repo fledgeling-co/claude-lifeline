@@ -225,30 +225,11 @@ heal_settings_chain() {
   # Point the gateway at what we displaced, and restart it ONLY if that actually changed:
   # a needless restart would cut in-flight requests from other claude sessions.
   local changed
-  changed="$(LIFELINE_HOME="${LIFELINE_HOME}" node -e '
-    const fs = require("fs"), path = require("path");
-    const p = path.join(process.env.LIFELINE_HOME, "config.json");
-    const next = process.argv[1];
-    let raw = null;
-    try { raw = fs.readFileSync(p, "utf8"); } catch { raw = null; }
-    let cfg = {};
-    if (raw !== null) {
-      // A config we cannot parse is a config we must not REPLACE: writing {upstream} over it
-      // would drop gatewayHost, gatewayPort and every hand-tuned key, and loadConfig swallows
-      // the parse error and silently falls back to the plain API.
-      try { cfg = JSON.parse(raw); } catch { process.stdout.write("unreadable"); process.exit(0); }
-    }
-    if (cfg.upstream === next) { process.stdout.write(""); }
-    else {
-      cfg.upstream = next;
-      // Temp + rename: the gateway, daemon, watcher and CLI all read this file on their own
-      // schedule, and this now runs on every launch rather than once at install.
-      const tmp = p + "." + process.pid + ".tmp";
-      fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n");
-      fs.renameSync(tmp, p);
-      process.stdout.write("changed");
-    }
-  ' "${displaced}" 2>/dev/null || true)"
+  # This is a configuration transition with an invariant, not an ad-hoc JSON edit: replacing
+  # the upstream MUST clear the old Relay identity marker. The script is tested directly and
+  # copied beside this wrapper at install time, so a moved checkout cannot change the behaviour.
+  changed="$(node "${LIFELINE_HOME}/update-gateway-upstream.mjs" \
+    "${LIFELINE_HOME}/config.json" "${displaced}" 2>/dev/null || true)"
 
   if [[ "${changed}" == "changed" ]] && command -v launchctl >/dev/null 2>&1; then
     launchctl kickstart -k "gui/$(id -u)/com.lifeline.gateway" >/dev/null 2>&1 || true
