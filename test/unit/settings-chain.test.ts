@@ -76,6 +76,22 @@ describe("patch-settings apply", () => {
     expect(readFileSync(box.settingsPath, "utf8")).toBe(after);
   });
 
+  it("republishes the marker when it has gone missing under an already-chained base URL", () => {
+    // The marker is lost by an `apply` that runs while ANTHROPIC_BASE_URL is absent (the state
+    // just after a sibling proxy disconnects). Every later run sees the gateway already in the
+    // base URL and returns early, so without a repair here the marker never comes back and the
+    // sibling proxy silently cuts lifeline out of the path on its next reconnect.
+    const box = sandbox({ env: { ANTHROPIC_BASE_URL: PROXY } });
+    run("apply", box, GATEWAY);
+    const stripped = JSON.parse(readFileSync(box.settingsPath, "utf8"));
+    delete stripped.env.LIFELINE_CHAINED_UPSTREAM;
+    writeFileSync(box.settingsPath, JSON.stringify(stripped, null, 2) + "\n");
+
+    expect(run("apply", box, GATEWAY)).toBe(PROXY);
+    expect(envOf(box).LIFELINE_CHAINED_UPSTREAM).toBe(PROXY);
+    expect(envOf(box).ANTHROPIC_BASE_URL).toBe(GATEWAY);
+  });
+
   it("treats a trailing-slash gateway as already chained", () => {
     const box = sandbox({ env: { ANTHROPIC_BASE_URL: `${GATEWAY}/` } });
     run("apply", box, GATEWAY);

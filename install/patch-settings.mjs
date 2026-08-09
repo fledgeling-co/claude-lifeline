@@ -76,7 +76,24 @@ if (mode === "apply") {
   const env = settings.env ?? {};
   const current = env.ANTHROPIC_BASE_URL ?? null;
   if (current !== null && sameEndpoint(current, gatewayUrl)) {
-    console.log(readRecordedOriginal() ?? "");
+    // Already chained. Re-publish the marker if it has gone missing, because THIS is the only
+    // branch that can repair it: once the base URL names the gateway, the write further down is
+    // permanently unreachable. It goes missing whenever an `apply` ran while ANTHROPIC_BASE_URL
+    // was absent (the state just after a sibling proxy disconnects) — that run takes the `else
+    // delete` path below, and every later run lands here and returns. A sibling proxy reads the
+    // marker to know lifeline is still in front of it; without it, that proxy heals the base URL
+    // back to itself and silently cuts lifeline out of the path.
+    const displaced = readRecordedOriginal();
+    if (
+      displaced !== null &&
+      // Never publish the gateway's own url: that is the self-chain loop sameEndpoint exists for.
+      !sameEndpoint(displaced, gatewayUrl) &&
+      !sameEndpoint(env.LIFELINE_CHAINED_UPSTREAM ?? "", displaced)
+    ) {
+      settings.env = { ...env, LIFELINE_CHAINED_UPSTREAM: displaced };
+      writeJsonAtomic(SETTINGS, settings);
+    }
+    console.log(displaced ?? "");
     process.exit(0); // already chained (idempotent re-install)
   }
   mkdirSync(LIFELINE_HOME, { recursive: true });
