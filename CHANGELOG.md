@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **lifeline was silently absent for 18 hours, and nothing said so.** Three of its launchd agents (gateway, daemon and watcher) were sitting in launchd's persistent disabled list, a state that survives a reboot. The wrapper made sure the daemon was up with `launchctl kickstart`, and that only ever works on a label launchd already has loaded, so it failed on every single launch without a word. The installer had the same blind spot: it booted each service out, bootstrapped it again without re-enabling it, then printed "loaded" either way. With the gateway not listening, the wrapper's other rule (only route claude through a gateway that answers) left `ANTHROPIC_BASE_URL` pointing straight past lifeline at the relay behind it. A workflow lost agents to an upstream error with nothing watching. Now a failed kickstart escalates to enable plus bootstrap, the installer checks that the job actually registered and says so loudly when it didn't, the wrapper revives a dead gateway before deciding whether to chain, and you get a line on stderr when claude is about to run unprotected.
+- **A relay with no account free killed the agent that asked.** A multi-account relay answering `no-eligible-account` / `over_reserve` was read as a generic overloaded server: retried for up to 90 seconds, then handed to the agent, which died on it. That answer is now told apart from one account's own session limit. A pool re-admits accounts as their reserves roll over, so the gateway holds the request for up to a minute (`parkHoldMs`, default 60s; set it to 0 for the old behaviour) and usually gets a real answer back. A session limit resets in hours, so it's still forwarded straight away for the daemon to park and retry; holding the socket for that would only add latency to a request that can't succeed.
+
+### Added
+
+- `lifeline doctor` now reports what launchd is actually doing with each agent. A disabled agent is named as disabled, with the `launchctl enable` command that clears it, instead of only ever showing as "not running".
+
 ## 0.4.1 (2026-08-09)
 
 ### Fixed
