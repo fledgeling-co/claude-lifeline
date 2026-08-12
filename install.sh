@@ -205,12 +205,30 @@ render() { sed \
   -e "s|@@PATH@@|${PATH}|g" \
   "$1"; }
 
+# Load a launchd agent, and verify it. `bootout` can leave a label in launchd's PERSISTENT
+# disabled list — a state that survives reboots, makes the following `bootstrap` fail, and
+# makes every later `kickstart` from the wrapper fail with it. The result was a lifeline that
+# reported "loaded" at install time and was absent for hours afterwards. So: enable before
+# bootstrapping, and confirm the job really registered instead of trusting the exit code.
+load_service() {
+  local label="$1" plist="$2" domain
+  domain="gui/$(id -u)"
+  launchctl bootout "${domain}/${label}" >/dev/null 2>&1 || true
+  launchctl enable "${domain}/${label}" >/dev/null 2>&1 || true
+  launchctl bootstrap "${domain}" "${plist}" >/dev/null 2>&1 \
+    || launchctl load "${plist}" >/dev/null 2>&1 || true
+  launchctl print "${domain}/${label}" >/dev/null 2>&1
+}
+
 for svc in gateway daemon watcher; do
   plist="${LAUNCH_AGENTS}/com.lifeline.${svc}.plist"
   render "${SRC}/install/com.lifeline.${svc}.plist.tmpl" > "${plist}"
-  launchctl bootout "gui/$(id -u)/com.lifeline.${svc}" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "${plist}" >/dev/null 2>&1 || launchctl load "${plist}" >/dev/null 2>&1 || true
-  say "loaded com.lifeline.${svc}"
+  if load_service "com.lifeline.${svc}" "${plist}"; then
+    say "loaded com.lifeline.${svc}"
+  else
+    warn "com.lifeline.${svc} did NOT load — lifeline will not protect your sessions."
+    warn "  try:  launchctl enable gui/$(id -u)/com.lifeline.${svc} && launchctl bootstrap gui/$(id -u) ${plist}"
+  fi
 done
 
 # --- the status window (menu-bar app) ----------------------------------------------
@@ -222,9 +240,11 @@ if command -v swiftc >/dev/null 2>&1; then
   if swiftc -O -o "${LIFELINE_HOME}/bin/lifeline-menubar" "${SRC}/menubar/lifeline-menubar.swift" "${SRC}/menubar/TerminalRevealer.swift" 2>"${LIFELINE_HOME}/logs/menubar-build.log"; then
     plist="${LAUNCH_AGENTS}/com.lifeline.menubar.plist"
     render "${SRC}/install/com.lifeline.menubar.plist.tmpl" > "${plist}"
-    launchctl bootout "gui/$(id -u)/com.lifeline.menubar" >/dev/null 2>&1 || true
-    launchctl bootstrap "gui/$(id -u)" "${plist}" >/dev/null 2>&1 || launchctl load "${plist}" >/dev/null 2>&1 || true
-    say "loaded com.lifeline.menubar (look for the pulse in your menu bar)"
+    if load_service "com.lifeline.menubar" "${plist}"; then
+      say "loaded com.lifeline.menubar (look for the pulse in your menu bar)"
+    else
+      warn "com.lifeline.menubar did NOT load; everything else still works"
+    fi
   else
     warn "status-window build failed (see ${LIFELINE_HOME}/logs/menubar-build.log); continuing without it"
   fi

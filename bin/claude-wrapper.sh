@@ -160,8 +160,29 @@ fi
 # every few seconds, losing whatever it had in flight (a scheduled nudge, a summary mid-call)
 # and re-reading every ledger each time. Plain `kickstart` starts it if it is not running and
 # does nothing if it is, which is all "ensure the daemon is running" ever meant.
+#
+# But kickstart ONLY works on a label launchd currently has loaded. A service that was booted
+# out — or, worse, left in launchd's persistent disabled list, which survives reboots — fails
+# here every time, silently, forever: lifeline is simply absent while claude keeps launching
+# and nothing ever says so. So a kickstart failure escalates to enable + bootstrap, and a
+# failure after THAT is reported rather than swallowed.
+ensure_service() {
+  local label="$1" domain plist
+  domain="gui/$(id -u)"
+  launchctl kickstart "${domain}/${label}" >/dev/null 2>&1 && return 0
+
+  plist="${HOME}/Library/LaunchAgents/${label}.plist"
+  [[ -f "${plist}" ]] || return 1
+  # `enable` clears the persistent disabled flag; it is idempotent and harmless when unset.
+  launchctl enable "${domain}/${label}" >/dev/null 2>&1 || true
+  launchctl bootstrap "${domain}" "${plist}" >/dev/null 2>&1 \
+    || launchctl load "${plist}" >/dev/null 2>&1 || true
+  launchctl kickstart "${domain}/${label}" >/dev/null 2>&1
+}
+
 if command -v launchctl >/dev/null 2>&1; then
-  launchctl kickstart "gui/$(id -u)/com.lifeline.daemon" >/dev/null 2>&1 || true
+  ensure_service com.lifeline.daemon \
+    || echo "lifeline: could not start the recovery daemon (launchctl); run 'lifeline doctor'" >&2
 fi
 
 # --- keep claude routed through the gateway ----------------------------------------
@@ -236,6 +257,24 @@ heal_settings_chain() {
   fi
   echo "lifeline: claude was routed past the gateway; re-chained it (upstream ${displaced})" >&2
 }
+# A gateway that is not running is how lifeline goes quietly missing: the chain below only
+# writes settings.json when the gateway answers, and the export further down has the same
+# guard — so a booted-out listener means claude runs unprotected and nothing says so. Revive
+# it first, then give it a moment to bind before the chain is judged. Bounded (~2s) and only
+# ever paid when the gateway is actually down.
+ensure_gateway_up() {
+  command -v launchctl >/dev/null 2>&1 || return 0
+  gateway_answers && return 0
+  ensure_service com.lifeline.gateway || return 1
+  local i
+  for i in 1 2 3 4; do
+    sleep 0.5
+    gateway_answers && return 0
+  done
+  return 1
+}
+ensure_gateway_up \
+  || echo "lifeline: the gateway is not answering on ${GATEWAY_URL}; claude will run unprotected (run 'lifeline doctor')" >&2
 heal_settings_chain || true
 
 # --- route through the gateway if it is up -----------------------------------------

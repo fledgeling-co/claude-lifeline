@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -39,6 +40,23 @@ export interface GatewayProbe {
   error: string | null;
 }
 
+/**
+ * What launchd is doing with one of lifeline's agents.
+ *
+ * `disabled` is the state worth naming: it is persistent (it survives reboots), it makes
+ * `bootstrap` and every later `kickstart` fail, and until this check existed it was invisible —
+ * the daemon simply never ran and every other check just said "not running".
+ */
+export type LaunchdState = "loaded" | "disabled" | "absent" | "unknown";
+
+export interface LaunchdCheck {
+  /** Per-label state, or null when there is no launchctl to ask (non-macOS). */
+  services: Record<string, LaunchdState> | null;
+}
+
+/** The agents lifeline cannot do its job without. */
+export const CORE_LAUNCHD_LABELS = ["com.lifeline.gateway", "com.lifeline.daemon"] as const;
+
 export interface DaemonCheck {
   running: boolean;
   pid: number | null;
@@ -61,6 +79,8 @@ export interface CommandDeps {
   checkMenubar(): { installed: boolean };
   /** Which Claude Code the wrapper would launch, versus the newest one installed. */
   checkClaudeVersion(): ClaudeVersionCheck;
+  /** Whether launchd is actually holding lifeline's agents, per label. */
+  checkLaunchd(): LaunchdCheck;
   /** ANTHROPIC_BASE_URL from ~/.claude/settings.json, which outranks the environment. */
   readSettingsBaseUrl(): string | null;
   newId(): string;
@@ -201,6 +221,7 @@ export function defaultDeps(): CommandDeps {
     readIncompat: defaultReadIncompat,
     checkMenubar: defaultCheckMenubar,
     checkClaudeVersion: defaultCheckClaudeVersion,
+    checkLaunchd: defaultCheckLaunchd,
     readSettingsBaseUrl: defaultReadSettingsBaseUrl,
     newId: () => randomUUID(),
   };
@@ -500,6 +521,75 @@ export function claudeVersionVerdict(
   };
 }
 
+/**
+ * Ask launchd, per label, whether it is holding the job — and if not, whether the label is in
+ * the persistent disabled list. Two cheap read-only calls; anything unexpected degrades to
+ * `unknown` rather than inventing a verdict, because a doctor that cries wolf gets ignored.
+ */
+function defaultCheckLaunchd(): LaunchdCheck {
+  if (process.platform !== "darwin") return { services: null };
+  const domain = `gui/${process.getuid?.() ?? ""}`;
+  const run = (args: string[]): string | null => {
+    try {
+      return execFileSync("launchctl", args, {
+        encoding: "utf8",
+        timeout: 5_000,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      return null;
+    }
+  };
+
+  const disabledOut = run(["print-disabled", domain]);
+  if (disabledOut == null) return { services: null };
+  // Lines look like:  "com.lifeline.daemon" => disabled
+  const disabled = new Set<string>();
+  for (const line of disabledOut.split("\n")) {
+    const m = /"([^"]+)"\s*=>\s*(disabled|true)\b/.exec(line);
+    if (m?.[1] != null) disabled.add(m[1]);
+  }
+
+  const services: Record<string, LaunchdState> = {};
+  for (const label of CORE_LAUNCHD_LABELS) {
+    if (run(["print", `${domain}/${label}`]) != null) services[label] = "loaded";
+    else if (disabled.has(label)) services[label] = "disabled";
+    else services[label] = "absent";
+  }
+  return { services };
+}
+
+/**
+ * Pure verdict over the launchd states. Disabled outranks absent in the message because it is
+ * the one a re-install alone does not necessarily clear, and the one that keeps failing silently.
+ */
+export function launchdVerdict(check: LaunchdCheck): { level: CheckLevel; detail: string } {
+  if (check.services == null) {
+    return { level: "ok", detail: "not applicable on this platform" };
+  }
+  const entries = Object.entries(check.services);
+  const disabled = entries.filter(([, s]) => s === "disabled").map(([l]) => l);
+  const absent = entries.filter(([, s]) => s === "absent").map(([l]) => l);
+
+  if (disabled.length > 0) {
+    const uid = process.getuid?.() ?? 0;
+    return {
+      level: "fail",
+      detail:
+        `${disabled.join(", ")} disabled in launchd — a persistent state that survives reboots ` +
+        `and makes every restart attempt fail silently; fix with: ` +
+        `launchctl enable gui/${uid}/${disabled[0]} (then re-run install.sh)`,
+    };
+  }
+  if (absent.length > 0) {
+    return {
+      level: "fail",
+      detail: `${absent.join(", ")} not loaded — re-run install.sh to register the agents`,
+    };
+  }
+  return { level: "ok", detail: `launchd is holding ${entries.length} agents` };
+}
+
 export async function doctorCommand(deps: CommandDeps = defaultDeps()): Promise<DoctorReport> {
   const cfg = deps.config();
   const url = gatewayUrl(cfg);
@@ -522,6 +612,10 @@ export async function doctorCommand(deps: CommandDeps = defaultDeps()): Promise<
     level: daemon.running ? "ok" : "fail",
     detail: daemon.detail,
   });
+
+  // Why the two above are down, when they are. Reported after them so the cause reads under
+  // the symptom rather than instead of it.
+  checks.push({ id: "launchd", label: "launchd agents", ...launchdVerdict(deps.checkLaunchd()) });
 
   checks.push({
     id: "base-url",
