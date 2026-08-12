@@ -25,6 +25,8 @@ interface Row {
   expected: ErrorClass;
   retryable: boolean;
   park: boolean;
+  /** Asserted only where the row states it; `park` rows are the ones that care. */
+  holdable?: boolean;
 }
 
 const TABLE: Row[] = [
@@ -64,6 +66,47 @@ const TABLE: Row[] = [
     expected: "USAGE_LIMIT",
     retryable: true,
     park: true,
+  },
+  {
+    name: "Relay no-eligible-account 503",
+    input: {
+      status: 503,
+      message: '{"code":"no-eligible-account","reason":"over_reserve"}',
+    },
+    expected: "USAGE_LIMIT",
+    retryable: true,
+    park: true,
+    // A pool, not an account: members return as reserves roll over, so the gateway may hold.
+    holdable: true,
+  },
+  {
+    name: "Relay over_reserve wording without the code (2026-08-12 fan-out)",
+    input: {
+      status: 503,
+      message:
+        'API Error: 503 {"error":"2 of 3 accounts at or over their usage reserve (1 needing re-login)",' +
+        '"code":"no-eligible-account","reason":"over_reserve"}',
+    },
+    expected: "USAGE_LIMIT",
+    retryable: true,
+    park: true,
+    holdable: true,
+  },
+  {
+    name: "all accounts for binding are exhausted",
+    input: { message: "all accounts for binding are exhausted" },
+    expected: "USAGE_LIMIT",
+    retryable: true,
+    park: true,
+    holdable: true,
+  },
+  {
+    name: "one account's own session limit is parked but never held",
+    input: { message: "API Error: You have hit your session limit. Your limit resets at 3pm." },
+    expected: "USAGE_LIMIT",
+    retryable: true,
+    park: true,
+    holdable: false,
   },
 
   // 2 — rate limited (271 occurrences with variants).
@@ -255,7 +298,15 @@ describe("classify — forensic signature table", () => {
     expect(result.class).toBe(row.expected);
     expect(result.retryable).toBe(row.retryable);
     expect(result.park).toBe(row.park);
+    if (row.holdable !== undefined) expect(result.holdable).toBe(row.holdable);
     expect(result.reason).toBeTruthy();
+  });
+
+  it("only a park is ever holdable — nothing else may be slept on inside a request", () => {
+    for (const row of TABLE) {
+      const result = classify(row.input);
+      if (!result.park) expect(result.holdable).toBe(false);
+    }
   });
 
   it("parks only for USAGE_LIMIT — every other class is a hot loop or terminal", () => {

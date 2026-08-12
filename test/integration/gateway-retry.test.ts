@@ -37,6 +37,7 @@ import {
 import {
   BODY_AUTH,
   BODY_OVERLOADED,
+  BODY_POOL_EXHAUSTED,
   BODY_PROMPT_TOO_LONG,
   BODY_RATE_LIMIT,
   BODY_USAGE_LIMIT,
@@ -232,6 +233,53 @@ describe("gateway retry", () => {
     expect(Date.now() - started).toBeLessThan(5_000);
   });
 
+  it("5b. a pool with no eligible account is held through, not handed to the agent", async () => {
+    // The 2026-08-12 regression. Relay answered 503 no-eligible-account/over_reserve for a
+    // stretch of a fan-out; every agent that received it died on the spot. The pool is not the
+    // caller's own limit — accounts re-enter as their reserves roll over — so the gateway holds
+    // inside the request instead of forwarding a failure that was about to stop being true.
+    const base = await bring(
+      [
+        { kind: "status", status: 503, body: BODY_POOL_EXHAUSTED, times: 2 },
+        { kind: "status", status: 200, body: '{"ok":true}' },
+      ],
+      { parkHoldMs: 6_000 },
+    );
+
+    const res = await post(base);
+    expect(res.statusCode).toBe(200);
+    expect(await res.body.text()).toBe('{"ok":true}');
+    expect(seen().requests).toHaveLength(3);
+  });
+
+  it("5c. a pool that never recovers still forwards the real error once the hold is spent", async () => {
+    // The hold is bounded, and what comes out the other side is the upstream's own bytes:
+    // the daemon needs to classify it as USAGE_LIMIT and park the agent for a real retry.
+    const started = Date.now();
+    const base = await bring([{ kind: "status", status: 503, body: BODY_POOL_EXHAUSTED }], {
+      parkHoldMs: 1_200,
+      requestBudgetMs: 30_000,
+      gatewayMaxAttempts: 4,
+    });
+
+    const res = await post(base);
+    expect(res.statusCode).toBe(503);
+    expect(await res.body.text()).toBe(BODY_POOL_EXHAUSTED);
+    // Held, then released — never the full request budget.
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(seen().requests.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("5d. parkHoldMs = 0 restores the forward-immediately behaviour", async () => {
+    const base = await bring([{ kind: "status", status: 503, body: BODY_POOL_EXHAUSTED }], {
+      parkHoldMs: 0,
+    });
+
+    const res = await post(base);
+    expect(res.statusCode).toBe(503);
+    expect(seen().requests).toHaveLength(1);
+  });
+
   it("6. a refused upstream becomes a 502 carrying the transport code, and marks connectivity down", async () => {
     const dead = await reserveClosedPort();
     gateway = await startGateway(
@@ -419,5 +467,33 @@ describe("gateway header and URL plumbing", () => {
     const noRoom = shouldRetry(classify({ status: 503 }), 0, 9_900, policy, 10_000, () => 0.99);
     expect(noRoom.retry).toBe(false);
     expect(noRoom.reason).toBe("budget-exhausted");
+  });
+
+  it("shouldRetry: holds a pool park inside its hold budget, and only its hold budget", () => {
+    const policy = gatewayPolicy({ ...DEFAULT_CONFIG, gatewayMaxAttempts: 5, requestBudgetMs: 90_000 });
+    const pool = classify({ status: 503, message: BODY_POOL_EXHAUSTED });
+    expect(pool.class).toBe("USAGE_LIMIT");
+    expect(pool.park).toBe(true);
+    expect(pool.holdable).toBe(true);
+
+    // Held: the condition typically clears while the request is still in flight.
+    const held = shouldRetry(pool, 0, 0, policy, 90_000, () => 0.5, 60_000);
+    expect(held.retry).toBe(true);
+    expect(held.reason).toBe("hold:USAGE_LIMIT");
+
+    // The hold is its own budget, far shorter than the request budget it sits inside.
+    const spent = shouldRetry(pool, 0, 60_001, policy, 90_000, () => 0.5, 60_000);
+    expect(spent.retry).toBe(false);
+    expect(spent.reason).toBe("park-hold-exhausted");
+
+    // No hold configured is the old behaviour, exactly.
+    expect(shouldRetry(pool, 0, 0, policy, 90_000, () => 0.5, 0).retry).toBe(false);
+
+    // And one account's own session limit is never held: it resets on the provider's clock.
+    const account = classify({ status: 429, message: BODY_USAGE_LIMIT });
+    expect(account.holdable).toBe(false);
+    const notHeld = shouldRetry(account, 0, 0, policy, 90_000, () => 0.5, 60_000);
+    expect(notHeld.retry).toBe(false);
+    expect(notHeld.reason).toBe("park:USAGE_LIMIT");
   });
 });

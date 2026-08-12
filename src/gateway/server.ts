@@ -261,23 +261,38 @@ export function shouldRetry(
   policy: BackoffPolicy,
   budgetMs: number,
   rng?: () => number,
+  parkHoldMs = 0,
 ): RetryDecision {
   if (!classification.retryable) {
     return { retry: false, delayMs: 0, reason: `terminal:${classification.class}` };
   }
-  // A park (usage limit / accounts exhausted) heals in minutes to hours. Holding the
-  // client socket for that would trip the CLI's own SDK timeout, so it is forwarded
-  // through and the daemon schedules the real recovery.
+  // A park heals on the provider's clock — minutes to hours. Holding the client socket for
+  // that would trip the CLI's own SDK timeout, so it is forwarded through and the daemon
+  // schedules the real recovery.
+  //
+  // A HOLDABLE park is the exception worth making: a multi-account pool with nothing eligible
+  // right now re-admits members as their reserves roll over, so the condition frequently clears
+  // inside a minute. Forwarding it instantly kills the agent on something that was about to
+  // succeed — which is exactly how a fan-out loses half its agents to one bad minute. Retry
+  // within the hold budget; if it does not clear, forward and let the daemon park it as before.
+  let effectiveBudgetMs = budgetMs;
   if (classification.park) {
-    return { retry: false, delayMs: 0, reason: `park:${classification.class}` };
+    const hold = classification.holdable ? Math.min(budgetMs, Math.max(0, parkHoldMs)) : 0;
+    if (hold === 0) {
+      return { retry: false, delayMs: 0, reason: `park:${classification.class}` };
+    }
+    if (elapsedMs >= hold) {
+      return { retry: false, delayMs: 0, reason: "park-hold-exhausted" };
+    }
+    effectiveBudgetMs = hold;
   }
-  if (elapsedMs >= budgetMs) {
+  if (elapsedMs >= effectiveBudgetMs) {
     return { retry: false, delayMs: 0, reason: "budget-exhausted" };
   }
 
   const bounded: BackoffPolicy = {
     ...policy,
-    maxDurationMs: Math.min(policy.maxDurationMs ?? budgetMs, budgetMs),
+    maxDurationMs: Math.min(policy.maxDurationMs ?? effectiveBudgetMs, effectiveBudgetMs),
   };
   const next = nextDelay({
     policy: bounded,
@@ -291,10 +306,18 @@ export function shouldRetry(
   }
   // nextDelay clips the sleep to the remaining budget; a sleep that consumes all of it
   // leaves no time to actually issue the retry, so refuse rather than stall the client.
-  if (elapsedMs + next.delayMs >= budgetMs) {
-    return { retry: false, delayMs: 0, reason: "budget-exhausted" };
+  if (elapsedMs + next.delayMs >= effectiveBudgetMs) {
+    return {
+      retry: false,
+      delayMs: 0,
+      reason: classification.park ? "park-hold-exhausted" : "budget-exhausted",
+    };
   }
-  return { retry: true, delayMs: next.delayMs, reason: `retry:${classification.class}` };
+  return {
+    retry: true,
+    delayMs: next.delayMs,
+    reason: classification.park ? `hold:${classification.class}` : `retry:${classification.class}`,
+  };
 }
 
 /** Innermost `code` on an error or its cause chain (undici nests ECONNREFUSED under UND_ERR_*). */
@@ -634,6 +657,8 @@ async function handleRequest(
         Date.now() - startedAt,
         policy,
         cfg.requestBudgetMs,
+        undefined,
+        cfg.parkHoldMs,
       );
       if (decision.retry) {
         log.warn(
@@ -690,6 +715,8 @@ async function handleRequest(
       Date.now() - startedAt,
       policy,
       cfg.requestBudgetMs,
+      undefined,
+      cfg.parkHoldMs,
     );
     if (decision.retry) {
       log.warn(

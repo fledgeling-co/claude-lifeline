@@ -370,6 +370,7 @@ export function startDaemon(
         class: "STALL",
         retryable: true,
         park: false,
+        holdable: false,
         retryAfterMs: null,
         reason: `no output or context change for ${Math.round(s.quietForMs / 60000)}m`,
       };

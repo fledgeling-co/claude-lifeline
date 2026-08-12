@@ -16,6 +16,15 @@ export interface LifelineConfig {
   relayBridge?: { lastKnownPort: number } | null;
   /** Per-request wall-clock budget for in-gateway retries, ms. Keeps under the SDK timeout. */
   requestBudgetMs: number;
+  /**
+   * How long the gateway may hold a request against a *holdable* park — a multi-account pool
+   * reporting no eligible member — before forwarding the error. Bounded well under the SDK
+   * timeout, because the alternative is the agent dying on a condition that often clears in
+   * seconds. Never applied to a single account's own session limit, which resets in hours.
+   * Set to 0 to forward every park immediately, which was the behaviour before pool
+   * exhaustion was distinguished from an account's own limit.
+   */
+  parkHoldMs: number;
   /** Max retry attempts the gateway itself makes within one request. */
   gatewayMaxAttempts: number;
   /** The agent-level recovery policy the daemon uses (cap 30 etc). */
@@ -77,6 +86,7 @@ export const DEFAULT_CONFIG: LifelineConfig = {
   gatewayPort: 8787,
   upstream: process.env.LIFELINE_UPSTREAM ?? "https://api.anthropic.com",
   requestBudgetMs: 90_000,
+  parkHoldMs: 60_000,
   gatewayMaxAttempts: 8,
   recovery: DEFAULT_POLICY,
   daemonTickMs: 5_000,

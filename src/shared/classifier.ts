@@ -18,6 +18,17 @@ export interface Classification {
   retryable: boolean;
   /** true when recovery is a scheduled park (usage-limit), not a hot backoff loop. */
   park: boolean;
+  /**
+   * Only meaningful when `park` is true: the park may clear within seconds, so a bounded
+   * in-gateway hold is worth trying before the error is forwarded and the agent dies.
+   *
+   * True for a multi-account POOL that reports no eligible member right now (Relay's
+   * `no-eligible-account` / all-accounts-exhausted): members come back as their reserves
+   * roll over or a sibling request finishes, so the next minute often succeeds. False for
+   * one account's own session/usage limit, which resets in hours — holding the socket for
+   * that is pure latency on a request that cannot succeed.
+   */
+  holdable: boolean;
   /** Retry-After in ms if the source supplied one, else null. */
   retryAfterMs: number | null;
   reason: string;
@@ -42,13 +53,22 @@ const CONN_CODES = new Set([
 // Substrings observed in the forensic signatures (case-insensitive).
 // No bare "reset" here: it would swallow ECONNRESET, and every real usage-limit
 // signature already carries "session limit" / "usage limit" / "exhausted".
-const USAGE_LIMIT_MARKERS = [
-  "session limit",
-  "usage limit",
-  "you've hit your session limit",
+//
+// One account's own limit. Resets on the provider's clock (hours), so it parks and the
+// daemon reschedules; nothing the gateway can wait out.
+const ACCOUNT_LIMIT_MARKERS = ["session limit", "usage limit", "you've hit your session limit"];
+// A multi-account pool with nothing eligible *at this instant*. Same USAGE_LIMIT class and
+// the same park at the daemon, but holdable: the pool re-admits members as reserves roll
+// over, so the gateway retries within its hold budget before giving the agent the error.
+// Relay's structured 503 is a fresh resolver decision, not an overloaded upstream — which is
+// why it must not read as OVERLOADED and burn the request budget on one-second socket retries.
+const POOL_EXHAUSTED_MARKERS = [
   "all accounts for binding are exhausted",
   "all-accounts-exhausted",
+  "no-eligible-account",
+  "over_reserve",
 ];
+const USAGE_LIMIT_MARKERS = [...ACCOUNT_LIMIT_MARKERS, ...POOL_EXHAUSTED_MARKERS];
 // "Server is temporarily limiting requests (not your usage limit)" is 429-class and
 // carries the words "usage limit" inside a negation; it must be tested BEFORE the
 // usage-limit markers or 49 forensic occurrences park instead of backoff-retrying.
@@ -120,6 +140,7 @@ export function classify(input: ClassifyInput): Classification {
       class: "CONTEXT",
       retryable: false,
       park: false,
+      holdable: false,
       retryAfterMs,
       reason: "context/prompt too long — needs compaction, not retry",
     };
@@ -133,6 +154,7 @@ export function classify(input: ClassifyInput): Classification {
       class: "CONN",
       retryable: true,
       park: false,
+      holdable: false,
       retryAfterMs,
       reason: `transport error ${input.code} — connectivity signal`,
     };
@@ -144,19 +166,25 @@ export function classify(input: ClassifyInput): Classification {
       class: "RATE_LIMIT",
       retryable: true,
       park: false,
+      holdable: false,
       retryAfterMs,
       reason: "server-side throttling (explicitly not the account's usage limit)",
     };
   }
 
-  // USAGE_LIMIT is a scheduled park regardless of the carrying status.
+  // USAGE_LIMIT is a scheduled park regardless of the carrying status. A pool that has no
+  // eligible member right now is the same class, but the gateway may hold briefly for it.
   if (has(msg, USAGE_LIMIT_MARKERS)) {
+    const pool = has(msg, POOL_EXHAUSTED_MARKERS);
     return {
       class: "USAGE_LIMIT",
       retryable: true,
       park: true,
+      holdable: pool,
       retryAfterMs,
-      reason: "usage/session limit or accounts exhausted — park and retry on schedule",
+      reason: pool
+        ? "account pool has no eligible member — hold briefly, then park and retry on schedule"
+        : "usage/session limit — park and retry on schedule",
     };
   }
 
@@ -165,6 +193,7 @@ export function classify(input: ClassifyInput): Classification {
       class: "CONN",
       retryable: true,
       park: false,
+      holdable: false,
       retryAfterMs,
       reason: "SSE stream cut after partial flush — cannot un-send, surface as CONN",
     };
@@ -176,6 +205,7 @@ export function classify(input: ClassifyInput): Classification {
         class: "RATE_LIMIT",
         retryable: true,
         park: false,
+        holdable: false,
         retryAfterMs,
         reason: `status ${input.status} rate limited`,
       };
@@ -185,6 +215,7 @@ export function classify(input: ClassifyInput): Classification {
         class: "OVERLOADED",
         retryable: true,
         park: false,
+        holdable: false,
         retryAfterMs,
         reason: `status ${input.status} overloaded/server error`,
       };
@@ -194,6 +225,7 @@ export function classify(input: ClassifyInput): Classification {
         class: "AUTH",
         retryable: false,
         park: false,
+        holdable: false,
         retryAfterMs,
         reason: `status ${input.status} client/auth error — terminal`,
       };
@@ -206,6 +238,7 @@ export function classify(input: ClassifyInput): Classification {
       class: "CONN",
       retryable: true,
       park: false,
+      holdable: false,
       retryAfterMs,
       reason: "connectivity marker in message",
     };
@@ -215,6 +248,7 @@ export function classify(input: ClassifyInput): Classification {
       class: "RATE_LIMIT",
       retryable: true,
       park: false,
+      holdable: false,
       retryAfterMs,
       reason: "rate-limit marker in message",
     };
@@ -224,6 +258,7 @@ export function classify(input: ClassifyInput): Classification {
       class: "OVERLOADED",
       retryable: true,
       park: false,
+      holdable: false,
       retryAfterMs,
       reason: "overloaded marker in message",
     };
@@ -233,6 +268,7 @@ export function classify(input: ClassifyInput): Classification {
     class: "UNKNOWN",
     retryable: false,
     park: false,
+    holdable: false,
     retryAfterMs,
     reason: "unclassified — treated as terminal",
   };

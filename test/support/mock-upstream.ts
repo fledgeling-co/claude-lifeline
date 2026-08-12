@@ -46,6 +46,18 @@ export const BODY_USAGE_LIMIT = JSON.stringify({
   },
 });
 
+/**
+ * A multi-account relay reporting that no member is eligible RIGHT NOW — the verbatim shape
+ * seen when a fan-out lost its agents to one bad minute (2026-08-12). Same USAGE_LIMIT class
+ * as a session limit, but holdable: the pool re-admits accounts as reserves roll over, so the
+ * gateway holds briefly instead of handing the agent a death sentence.
+ */
+export const BODY_POOL_EXHAUSTED = JSON.stringify({
+  error: "2 of 3 accounts at or over their usage reserve (1 needing re-login)",
+  code: "no-eligible-account",
+  reason: "over_reserve",
+});
+
 /** Terminal: needs compaction, never a blind retry. Must pass through byte-for-byte. */
 export const BODY_PROMPT_TOO_LONG = JSON.stringify({
   type: "error",
