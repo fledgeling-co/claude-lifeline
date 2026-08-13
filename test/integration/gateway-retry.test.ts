@@ -163,7 +163,7 @@ describe("gateway retry", () => {
     expect(seen().requests.length).toBeLessThanOrEqual(4);
   });
 
-  it("3. an SSE stream cut after bytes were flushed is surfaced, not retried into a corrupt stream", async () => {
+  it("3. an SSE stream cut after bytes were flushed ends in an error event, not a corrupt retry", async () => {
     const CUT_AFTER = 420;
     const base = await bring([{ kind: "sse", cutAfterBytes: CUT_AFTER }]);
 
@@ -173,16 +173,18 @@ describe("gateway retry", () => {
 
     const { text } = await readBodyTolerant(res.body);
 
-    // The client received a strict PREFIX of the real stream — never a second attempt's bytes
-    // stitched onto the first, which is what a naive retry-after-commit would produce.
+    // The client received the original prefix — never a second attempt's bytes stitched onto the
+    // first, which is what a naive retry-after-commit would produce.
     const full = fullSseBody();
-    expect(text.length).toBeLessThanOrEqual(CUT_AFTER);
-    expect(text.length).toBeGreaterThan(0);
-    expect(full.startsWith(text)).toBe(true);
+    expect(text.startsWith(full.slice(0, CUT_AFTER))).toBe(true);
 
-    // The stream is visibly incomplete: no terminal event arrived.
+    // An ordinary EOF after a 200 leaves Claude Code's compaction view spinning because it never
+    // sees a terminal event. A protocol error is truthful, retryable by the client, and does not
+    // pretend the incomplete response reached message_stop.
     expect(text).not.toContain("message_stop");
     expect(text).toContain("message_start");
+    expect(text).toContain("event: error");
+    expect(text).toContain("upstream stream ended before completion; retry the request");
 
     // And, decisively, the upstream was asked exactly once.
     expect(seen().requests).toHaveLength(1);

@@ -568,9 +568,21 @@ function commitStream(
       });
       ctx.log.warn("upstream stream cut after flush", classification.reason);
       void ctx.connectivity.noteConnFailure(classification.reason);
-      // Cannot un-send what is already downstream: end cleanly and let the client's own
-      // truncation handling (and the daemon) treat it as CONN.
-      if (!res.writableEnded) res.end();
+      // Cannot un-send what is already downstream, and retrying would stitch a second response
+      // onto the first. An ordinary EOF is worse: Claude Code treats the 200 as an unfinished
+      // turn and leaves its compaction UI spinning for minutes. Anthropic streams carry terminal
+      // faults as an SSE `error` event, so surface this safe, local failure before closing.
+      if (!res.writableEnded && !res.destroyed) {
+        const event = JSON.stringify({
+          type: "error",
+          error: {
+            type: "api_error",
+            message: "lifeline gateway: upstream stream ended before completion; retry the request",
+          },
+        });
+        res.write(`event: error\ndata: ${event}\n\n`);
+        res.end();
+      }
       done();
     });
 
