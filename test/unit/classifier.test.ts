@@ -175,6 +175,13 @@ const TABLE: Row[] = [
     retryable: true,
     park: false,
   },
+  {
+    name: "undici body-idle timeout",
+    input: { code: "UND_ERR_BODY_TIMEOUT", message: "body timeout" },
+    expected: "CONN",
+    retryable: true,
+    park: false,
+  },
 
   // 6 — Connection closed mid-response (111 occurrences); the truncated-SSE signature.
   {

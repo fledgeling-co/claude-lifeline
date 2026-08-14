@@ -155,17 +155,21 @@ describe("summariseRun", () => {
   function harness(over: { cached?: CachedSummary | null; reply?: string; fail?: boolean } = {}) {
     let calls = 0;
     const saved: CachedSummary[] = [];
+    const inFlight = new Map<string, Promise<ReturnType<typeof parseSummary>>>();
+    const failedAttempts = new Map<string, { at: number }>();
     const deps = {
       now: () => 1_000_000,
       load: () => over.cached ?? null,
       save: (_: string, e: CachedSummary) => void saved.push(e),
+      inFlight,
+      failedAttempts,
       runModel: async () => {
         calls += 1;
         if (over.fail) throw new Error("model exploded");
         return over.reply ?? GOOD;
       },
     };
-    return { deps, saved, calls: () => calls };
+    return { deps, saved, failedAttempts, calls: () => calls };
   }
 
   it("calls the model and caches the result", async () => {
@@ -190,6 +194,7 @@ describe("summariseRun", () => {
     const out = await summariseRun(input(), cfg(), h.deps);
     expect(out?.title).toBe("old");
     expect(h.saved).toHaveLength(0);
+    expect(h.failedAttempts.size).toBe(1);
   });
 
   it("keeps the previous summary when the reply is unusable", async () => {
@@ -197,11 +202,64 @@ describe("summariseRun", () => {
     const h = harness({ cached: prev, reply: "no idea, sorry" });
     expect((await summariseRun(input(), cfg(), h.deps))?.title).toBe("old");
     expect(h.saved).toHaveLength(0);
+    expect(h.failedAttempts.size).toBe(1);
   });
 
   it("never throws when everything fails and there is nothing cached", async () => {
     const h = harness({ fail: true });
     await expect(summariseRun(input(), cfg(), h.deps)).resolves.toBeNull();
+  });
+
+  it("coalesces concurrent refreshes for the same run", async () => {
+    let calls = 0;
+    let settle: ((value: string) => void) | undefined;
+    const inFlight = new Map<string, Promise<ReturnType<typeof parseSummary>>>();
+    const pending = new Promise<string>((resolve) => {
+      settle = resolve;
+    });
+    const deps = {
+      now: () => 1_000_000,
+      load: () => null,
+      save: () => undefined,
+      inFlight,
+      failedAttempts: new Map<string, { at: number }>(),
+      runModel: async () => {
+        calls += 1;
+        return pending;
+      },
+    };
+
+    const first = summariseRun(input(), cfg(), deps);
+    const second = summariseRun(input(), cfg(), deps);
+    expect(calls).toBe(1);
+    settle?.(GOOD);
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+  });
+
+  it("throttles a failed summary before starting another paid request", async () => {
+    let current = 1_000_000;
+    let calls = 0;
+    const failedAttempts = new Map<string, { at: number }>();
+    const deps = {
+      now: () => current,
+      load: () => null,
+      save: () => undefined,
+      inFlight: new Map<string, Promise<ReturnType<typeof parseSummary>>>(),
+      failedAttempts,
+      runModel: async () => {
+        calls += 1;
+        throw new Error("upstream unavailable");
+      },
+    };
+    const policy = cfg({ minIntervalMs: 30_000 });
+
+    await summariseRun(input(), policy, deps);
+    current += 1_000;
+    await summariseRun(input(), policy, deps);
+    expect(calls).toBe(1);
+    current += 30_000;
+    await summariseRun(input(), policy, deps);
+    expect(calls).toBe(2);
   });
 
   it("makes no call at all while the feature is off", async () => {

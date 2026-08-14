@@ -112,6 +112,8 @@ export interface SseStep {
   cutAfterBytes?: number;
   /** ms to wait after the last flush before cutting; lets the bytes land downstream first. */
   cutDelayMs?: number;
+  /** Hold a successful SSE response open without a body byte, for idle-timeout coverage. */
+  stallAfterHeadersMs?: number;
   times?: number;
 }
 
@@ -234,6 +236,11 @@ export async function makeMockUpstream(
       "cache-control": "no-cache",
     });
     res.flushHeaders();
+
+    if (step.stallAfterHeadersMs !== undefined) {
+      setTimeout(() => res.end(), step.stallAfterHeadersMs);
+      return;
+    }
 
     const chunks = splitChunks(payload, rand);
     for (let i = 0; i < chunks.length; i += 1) {

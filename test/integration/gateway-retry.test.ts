@@ -41,6 +41,7 @@ import {
   BODY_PROMPT_TOO_LONG,
   BODY_RATE_LIMIT,
   BODY_USAGE_LIMIT,
+  DEFAULT_SSE_EVENTS,
   fullSseBody,
   makeMockUpstream,
   readBodyTolerant,
@@ -198,6 +199,38 @@ describe("gateway retry", () => {
     const { text, errored } = await readBodyTolerant(res.body);
     expect(errored).toBe(false);
     expect(text).toBe(fullSseBody());
+    expect(seen().requests).toHaveLength(1);
+  });
+
+  it("3c. a clean SSE EOF without message_stop is surfaced as an error, not completion", async () => {
+    const base = await bring([{ kind: "sse", events: DEFAULT_SSE_EVENTS.slice(0, -1) }]);
+
+    const res = await post(base);
+    const { text, errored } = await readBodyTolerant(res.body);
+
+    expect(errored).toBe(false);
+    expect(text).not.toContain("message_stop");
+    expect(text).toContain("event: error");
+    expect(text).toContain("upstream stream ended before completion; retry the request");
+    expect(seen().requests).toHaveLength(1);
+  });
+
+  it("3d. a body-idle timeout is bounded and surfaced as an SSE error", async () => {
+    const base = await bring([{ kind: "sse", stallAfterHeadersMs: 5_000 }], {
+      gatewayMaxAttempts: 1,
+      requestBudgetMs: 1,
+    });
+    const startedAt = Date.now();
+
+    const res = await post(base);
+    const { text, errored } = await readBodyTolerant(res.body);
+
+    expect(errored).toBe(false);
+    expect(text).toContain("event: error");
+    expect(text).toContain("upstream stream ended before completion; retry the request");
+    // The mock will eventually cleanly close at five seconds; the assertion must therefore prove
+    // Undici's one-second idle wall, while leaving CI scheduler jitter room.
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
     expect(seen().requests).toHaveLength(1);
   });
 

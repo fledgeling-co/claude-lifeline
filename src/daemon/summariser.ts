@@ -212,6 +212,29 @@ export interface SummariseDeps {
   now?: () => number;
   load?: (runId: string) => CachedSummary | null;
   save?: (runId: string, entry: CachedSummary) => void;
+  /** Injectable so tests can prove that a slow call is coalesced instead of multiplied. */
+  inFlight?: Map<string, Promise<RunSummary | null>>;
+  /** Failed calls are retried only after the configured interval, not on every daemon tick. */
+  failedAttempts?: Map<string, { at: number }>;
+}
+
+const inFlightSummaries = new Map<string, Promise<RunSummary | null>>();
+const failedSummaryAttempts = new Map<string, { at: number }>();
+const maxFailedSummaryAttempts = 512;
+
+function noteFailedAttempt(
+  attempts: Map<string, { at: number }>,
+  runId: string,
+  at: number,
+): void {
+  // Failed runs must not turn the throttle itself into an unbounded long-lived daemon cache.
+  // A `Map` preserves insertion order, so evicting the oldest entry keeps recent active runs.
+  attempts.delete(runId);
+  if (attempts.size >= maxFailedSummaryAttempts) {
+    const oldest = attempts.keys().next().value;
+    if (typeof oldest === "string") attempts.delete(oldest);
+  }
+  attempts.set(runId, { at });
 }
 
 /**
@@ -236,35 +259,64 @@ export const defaultRunModel: RunModel = (prompt, cfg) =>
 /**
  * Produce a summary for one run, using the cache. Returns the summary to display (which may be
  * the cached one) or null when there is nothing to show. Never throws and never rejects: a failed
- * or slow call leaves the previous summary in place and is logged once.
+ * or slow call leaves the previous summary in place, records an attempt, and is not retried until
+ * the configured interval has passed.
  */
-export async function summariseRun(
+export function summariseRun(
   input: SummaryInput,
   cfg: SummaryConfig,
   deps: SummariseDeps = {},
+): Promise<RunSummary | null> {
+  const inFlight = deps.inFlight ?? inFlightSummaries;
+  const existing = inFlight.get(input.runId);
+  if (existing) return existing;
+
+  let task: Promise<RunSummary | null>;
+  task = summariseRunOnce(input, cfg, deps).finally(() => {
+    if (inFlight.get(input.runId) === task) inFlight.delete(input.runId);
+  });
+  inFlight.set(input.runId, task);
+  return task;
+}
+
+async function summariseRunOnce(
+  input: SummaryInput,
+  cfg: SummaryConfig,
+  deps: SummariseDeps,
 ): Promise<RunSummary | null> {
   const now = deps.now ?? Date.now;
   const load = deps.load ?? loadSummary;
   const save = deps.save ?? saveSummary;
   const runModel = deps.runModel ?? defaultRunModel;
+  const failedAttempts = deps.failedAttempts ?? failedSummaryAttempts;
 
   const cached = load(input.runId);
   if (!cfg.enabled) return cached?.result ?? null;
 
   const trimmed = buildInput(input, cfg);
   const hash = inputHash(trimmed);
-  if (!shouldSummarise(cached, hash, now(), cfg)) return cached?.result ?? null;
+  const attemptedAt = now();
+  const previousFailure = failedAttempts.get(input.runId);
+  if (
+    (previousFailure !== undefined && attemptedAt - previousFailure.at < cfg.minIntervalMs) ||
+    !shouldSummarise(cached, hash, attemptedAt, cfg)
+  ) {
+    return cached?.result ?? null;
+  }
 
   try {
     const raw = await runModel(renderPrompt(trimmed), cfg);
     const result = parseSummary(raw, trimmed.agents.map((a) => a.agentId));
     if (result === null) {
+      noteFailedAttempt(failedAttempts, input.runId, now());
       log.warn(`summary for ${input.runId} was not usable JSON; keeping the previous one`);
       return cached?.result ?? null;
     }
+    failedAttempts.delete(input.runId);
     save(input.runId, { hash, result, at: now() });
     return result;
   } catch (err) {
+    noteFailedAttempt(failedAttempts, input.runId, now());
     log.warn(`summary for ${input.runId} failed`, String(err));
     return cached?.result ?? null;
   }

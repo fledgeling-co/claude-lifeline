@@ -11,9 +11,10 @@
  *     client. Status + headers are read first, the retry-or-commit decision is made, and
  *     only then does the body start flowing. After that the stream is committed: a
  *     mid-flight cut is a CONN truncation for the daemon to recover, not a retry.
- *  2. **Never synthesize.** A terminal class (CONTEXT/AUTH) or an exhausted schedule
- *     forwards the upstream response through byte-for-byte. The only manufactured
- *     response in this file is for a transport error where no upstream response exists.
+ *  2. **Never falsify a terminal response.** A terminal class (CONTEXT/AUTH) or an exhausted
+ *     schedule forwards the upstream response byte-for-byte. The two safe local failures are a
+ *     transport error before any upstream response and an explicit SSE `error` after an already
+ *     committed stream truncates; neither is retried or presented as a completed turn.
  *
  * Long recovery (usage limits, 30 attempts over an hour) deliberately does NOT live here —
  * holding the client socket that long would trip the CLI's own SDK timeout. Those are
@@ -548,10 +549,28 @@ function commitStream(
 ): Promise<void> {
   return new Promise<void>((resolve) => {
     let settled = false;
+    const isAnthropicSSE = headerValue(upstreamHeaders, "content-type")
+      ?.toLowerCase()
+      .includes("text/event-stream") ?? false;
+    let sseTail = "";
+    let sawSseTerminal = !isAnthropicSSE;
     const done = (): void => {
       if (settled) return;
       settled = true;
       resolve();
+    };
+
+    const endWithStreamError = (): void => {
+      if (res.writableEnded || res.destroyed) return;
+      const event = JSON.stringify({
+        type: "error",
+        error: {
+          type: "api_error",
+          message: "lifeline gateway: upstream stream ended before completion; retry the request",
+        },
+      });
+      res.write(`event: error\ndata: ${event}\n\n`);
+      res.end();
     };
 
     res.writeHead(status, buildResponseHeaders(upstreamHeaders));
@@ -572,15 +591,32 @@ function commitStream(
       // onto the first. An ordinary EOF is worse: Claude Code treats the 200 as an unfinished
       // turn and leaves its compaction UI spinning for minutes. Anthropic streams carry terminal
       // faults as an SSE `error` event, so surface this safe, local failure before closing.
-      if (!res.writableEnded && !res.destroyed) {
-        const event = JSON.stringify({
-          type: "error",
-          error: {
-            type: "api_error",
-            message: "lifeline gateway: upstream stream ended before completion; retry the request",
-          },
-        });
-        res.write(`event: error\ndata: ${event}\n\n`);
+      endWithStreamError();
+      done();
+    });
+
+    if (isAnthropicSSE) {
+      upstreamBody.on("data", (chunk: Buffer | string) => {
+        // The sentinels are ASCII, so a short rolling tail remains safe even when a UTF-8 body
+        // chunk happens to split a multi-byte content token. An upstream `error` is terminal too:
+        // do not append a second one to a protocol-complete failure.
+        const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+        sseTail = (sseTail + text).slice(-512);
+        sawSseTerminal =
+          sawSseTerminal ||
+          sseTail.includes("event: message_stop") ||
+          sseTail.includes('"type":"message_stop"') ||
+          sseTail.includes("event: error") ||
+          sseTail.includes('"type":"error"');
+      });
+    }
+
+    upstreamBody.on("end", () => {
+      if (isAnthropicSSE && !sawSseTerminal) {
+        ctx.log.warn("upstream SSE ended without terminal event");
+        void ctx.connectivity.noteConnFailure("SSE ended without message_stop or error");
+        endWithStreamError();
+      } else if (!res.writableEnded && !res.destroyed) {
         res.end();
       }
       done();
@@ -592,7 +628,10 @@ function commitStream(
     });
     res.on("finish", done);
 
-    upstreamBody.pipe(res);
+    // Own the end ourselves: a clean TCP EOF without Anthropic's mandatory terminal event is a
+    // truncated response, not success. Node's default `pipe(..., { end: true })` would make it
+    // indistinguishable from a completed compaction to the client.
+    upstreamBody.pipe(res, { end: false });
   });
 }
 
@@ -640,9 +679,11 @@ async function handleRequest(
         headers: forwardHeaders,
         body: body.length > 0 ? body : undefined,
         signal: controller.signal,
-        // Bound the pre-commit phase to the retry budget: undici's 300s default would let
-        // one hung attempt swallow the whole schedule.
+        // Bound both pre-commit headers and the gaps between body chunks to the retry budget.
+        // Undici defaults each to 300s; once SSE headers had been flushed, that body default made
+        // a stalled compaction sit at 88–95% for over five minutes before the socket failed.
         headersTimeout: Math.max(1_000, cfg.requestBudgetMs),
+        bodyTimeout: Math.max(1_000, cfg.requestBudgetMs),
       });
     } catch (err) {
       res.removeListener("close", abortOnClose);

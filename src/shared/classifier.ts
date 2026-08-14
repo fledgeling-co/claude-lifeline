@@ -48,6 +48,7 @@ const CONN_CODES = new Set([
   "UND_ERR_SOCKET",
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
 ]);
 
 // Substrings observed in the forensic signatures (case-insensitive).
